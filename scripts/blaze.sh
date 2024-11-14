@@ -19,7 +19,6 @@ name[5]=yahoo
 cd blaze
 mkdir -p build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j 16 && cd ../scripts/
 
-
 # BFS
 ./run.py --result_dir ${result_dir} --disks ${disks} -t ${threads} -k bfs -d ${name[0]} --start_node ${rts[0]}
 ./run.py --result_dir ${result_dir} --disks ${disks} -t ${threads} -k bfs -d ${name[1]} --start_node ${rts[1]}
