@@ -290,6 +290,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
 
     return parser
 
+# python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "$HOME/chunk_graph_blktrace_test" --device "/dev/nvme0n1p1" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
 def main():
 
     # Parse arguments.
