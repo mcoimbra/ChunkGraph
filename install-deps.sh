@@ -16,6 +16,7 @@ echo "[INFO] - Package manager detected: $PACKAGE_MANAGER"
 
 # Track missing packages
 MISSING_PACKAGES=()
+FAILED_INSTALLS=()
 
 # Check if Docker is available
 if command -v docker >/dev/null 2>&1; then
@@ -29,10 +30,11 @@ fi
 
 # Define packages based on package manager
 declare -A PACKAGES=(
+    ["cmake"]="cmake"
+    ["blktrace"]="blktrace"
     ["libnuma1"]="libnuma1"
     ["libnuma-dev_or_numactl-devel"]="$([[ $PACKAGE_MANAGER == 'apt' ]] && echo 'libnuma-dev' || echo 'numactl-devel')"
     ["sysstat"]="sysstat"
-    ["cmake"]="cmake"
 )
 
 # Check each package and print installation status
@@ -48,6 +50,25 @@ for package_name in "${!PACKAGES[@]}"; do
     fi
 done
 
+# # Attempt to install missing packages, if any
+# if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+#     echo "[INFO] - Attempting to install missing packages..."
+#     for pkg in "${MISSING_PACKAGES[@]}"; do
+#         if [[ "$pkg" == "docker" ]]; then
+#             continue # Skip Docker, as we're not installing it directly through the script
+#         fi
+#         echo "[INFO] - Installing '$pkg'..."
+#         if ! $INSTALL_COMMAND "$pkg"; then
+#             echo "[ERROR] - Failed to install '$pkg'. Exiting with error code."
+#             exit $?
+#         fi
+#     done
+#     echo "[ERROR] - Some required packages were missing. Please check the above messages."
+#     exit 1
+# else
+#     echo "[INFO] - All required packages are already installed."
+# fi
+
 # Attempt to install missing packages, if any
 if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
     echo "[INFO] - Attempting to install missing packages..."
@@ -57,12 +78,21 @@ if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
         fi
         echo "[INFO] - Installing '$pkg'..."
         if ! $INSTALL_COMMAND "$pkg"; then
-            echo "[ERROR] - Failed to install '$pkg'. Exiting with error code."
-            exit $?
+            echo "[ERROR] - Failed to install '$pkg'."
+            FAILED_INSTALLS+=("$pkg")
         fi
     done
-    echo "[ERROR] - Some required packages were missing. Please check the above messages."
-    exit 1
+
+    # Check if any installs failed
+    if [ ${#FAILED_INSTALLS[@]} -gt 0 ]; then
+        echo "[ERROR] - The following packages could not be installed:"
+        for failed_pkg in "${FAILED_INSTALLS[@]}"; do
+            echo "    - $failed_pkg"
+        done
+        exit 1
+    else
+        echo "[INFO] - All missing packages were successfully installed."
+    fi
 else
     echo "[INFO] - All required packages are already installed."
 fi

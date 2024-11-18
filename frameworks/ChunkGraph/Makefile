@@ -1,10 +1,15 @@
 
 .PHONY: chunk_graph clean csr_graph blaze_image_fetch
 
-chunk_graph:
+chunk_graph_build:
 	@echo "[INFO] - Building ChunkGraph..."
 	@cd apps && export CHUNK=1 && make
-	@echo "[INFO] - Finished building ChunkGraph, returning to original directory.
+	@echo "[INFO] - Finished building ChunkGraph, returning to original directory."
+
+chunk_graph_clean:
+	@echo "[INFO] - Building ChunkGraph..."
+	@cd apps && export CHUNK=1 && make clean
+	@echo "[INFO] - Finished building ChunkGraph, returning to original directory."
 
 clean:
 	@echo "[INFO] - Cleaning repository..."
