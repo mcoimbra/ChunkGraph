@@ -182,20 +182,19 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     device: str = device_path[device_path.rfind(os.path.sep) + 1 :]
     merge_target_path: str = os.path.join(output_dir, f"{device}.blktrace.merged.txt")
     logger.info(f"Starting blkparse to create:\n\t{merge_target_path}")
-    merge_blktrace_files(output_dir, device, merge_target_path)
-
-    #sys.exit(0)
+    merge_blktrace_files(device, merge_target_path, output_dir)
 
     # Step 2: Parse the merged output
     df: pd.DataFrame = parse_blkparse_output(merge_target_path)
 
     # Step 3: Visualize overview
-    visualize_overview(df)
+    plot_basename: str = f"{device}.blktrace"
+    visualize_overview(df, plot_basename, output_dir)
 
     # Step 4: Visualize per CPU
-    visualize_per_cpu(df)
+    visualize_per_cpu(df, plot_basename, output_dir)
 
-def merge_blktrace_files(blktrace_dir: str, device: str, output_file: str) -> None:
+def merge_blktrace_files(device: str, output_file: str, blktrace_dir: str) -> None:
     """
     Merges per-CPU blktrace files into a unified trace file using blkparse.
 
@@ -230,7 +229,7 @@ def parse_blkparse_output(file_path: str) -> pd.DataFrame:
     with open(file_path, "r") as f:
         for line in f:
             line: str
-            parts = line.split()
+            parts: List[str] = line.split()
             if len(parts) > 6 and parts[3].replace(".", "").isdigit():
                 timestamp: float = float(parts[3])
                 cpu: int = int(parts[1])  # CPU ID
@@ -238,7 +237,7 @@ def parse_blkparse_output(file_path: str) -> pd.DataFrame:
                 data.append({"timestamp": timestamp, "cpu": cpu, "operation": operation})
     return pd.DataFrame(data)
 
-def visualize_overview(df: pd.DataFrame) -> None:
+def visualize_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
     """
     Generates an overview plot of throughput over time across all CPUs.
 
@@ -247,19 +246,39 @@ def visualize_overview(df: pd.DataFrame) -> None:
     """
     # Group by time (in seconds) for throughput
     df["time_bin"] = (df["timestamp"] // 1).astype(int)
-    throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("time_bin").size()
+    #throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("time_bin").size()
+    throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("timestamp").size()
 
     # Plot
     plt.figure(figsize=(10, 6))
     plt.plot(throughput.index, throughput.values, label="Throughput (IOPS)")
+    print(throughput.head())  # Check first few rows
+    print("X-axis values (Time bins):")
+    print(throughput.index)
+    print("Y-axis values (IOPS):")
+    print(throughput.values)
+
+    print(df)
+
+    if throughput.empty:
+        print(f"No data to plot. Skipping...")
+        return
+
+    # Make sure the X-axis starts from 0
+    plt.xlim(left=0)
+    
     plt.title("Overall Throughput Over Time")
     plt.xlabel("Time (s)")
     plt.ylabel("Throughput (IOPS)")
     plt.legend()
     plt.grid()
-    plt.show()
 
-def visualize_per_cpu(df: pd.DataFrame) -> None:
+    png_out_path: str = os.path.join(output_dir, f"{plot_basename}.png")
+    plt.savefig(png_out_path, dpi=300)
+    pdf_out_path: str = os.path.join(output_dir, f"{plot_basename}.pdf")
+    plt.savefig(pdf_out_path)
+
+def visualize_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
     """
     Generates per-CPU visualizations of throughput over time.
 
@@ -275,12 +294,27 @@ def visualize_per_cpu(df: pd.DataFrame) -> None:
         # Plot
         plt.figure(figsize=(10, 6))
         plt.plot(throughput.index, throughput.values, label=f"CPU {cpu} Throughput (IOPS)")
+        print(throughput.head())  # Check first few rows
+
+        if throughput.empty:
+            print(f"No data to plot for CPU {cpu}. Skipping...")
+            continue  # Skip if no data is available
+
+        # Make sure the X-axis starts from 0
+        plt.xlim(left=0)
+
         plt.title(f"Throughput Over Time for CPU {cpu}")
         plt.xlabel("Time (s)")
         plt.ylabel("Throughput (IOPS)")
         plt.legend()
         plt.grid()
-        plt.show()
+
+        png_out_path: str = os.path.join(output_dir, f"{plot_basename}.{cpu}.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path: str = os.path.join(output_dir, f"{plot_basename}.{cpu}.pdf")
+        plt.savefig(pdf_out_path)
+
+
 
 
 def create_arg_parser() -> argparse.ArgumentParser:
