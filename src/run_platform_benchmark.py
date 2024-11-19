@@ -5,7 +5,7 @@ import pprint
 import subprocess
 import sys
 import time
-from typing import IO, List
+from typing import Any, IO, List
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -184,10 +184,10 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     logger.info(f"Starting blkparse to create:\n\t{merge_target_path}")
     merge_blktrace_files(output_dir, device, merge_target_path)
 
-    sys.exit(0)
+    #sys.exit(0)
 
     # Step 2: Parse the merged output
-    df = parse_blkparse_output(merge_target_path)
+    df: pd.DataFrame = parse_blkparse_output(merge_target_path)
 
     # Step 3: Visualize overview
     visualize_overview(df)
@@ -226,13 +226,14 @@ def parse_blkparse_output(file_path: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Parsed data with columns for timestamp, CPU, operation, etc.
     """
-    data = []
+    data: pd.DataFrame = []
     with open(file_path, "r") as f:
         for line in f:
+            line: str
             parts = line.split()
             if len(parts) > 6 and parts[3].replace(".", "").isdigit():
-                timestamp = float(parts[3])
-                cpu = int(parts[1])  # CPU ID
+                timestamp: float = float(parts[3])
+                cpu: int = int(parts[1])  # CPU ID
                 operation = parts[6]
                 data.append({"timestamp": timestamp, "cpu": cpu, "operation": operation})
     return pd.DataFrame(data)
@@ -246,7 +247,7 @@ def visualize_overview(df: pd.DataFrame) -> None:
     """
     # Group by time (in seconds) for throughput
     df["time_bin"] = (df["timestamp"] // 1).astype(int)
-    throughput = df.groupby("time_bin").size()
+    throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("time_bin").size()
 
     # Plot
     plt.figure(figsize=(10, 6))
@@ -269,7 +270,7 @@ def visualize_per_cpu(df: pd.DataFrame) -> None:
     grouped = df.groupby("cpu")
     for cpu, cpu_data in grouped:
         cpu_data["time_bin"] = (cpu_data["timestamp"] // 1).astype(int)
-        throughput = cpu_data.groupby("time_bin").size()
+        throughput: Any[pd.DataFrame, pd.Series[int]] = cpu_data.groupby("time_bin").size()
 
         # Plot
         plt.figure(figsize=(10, 6))
