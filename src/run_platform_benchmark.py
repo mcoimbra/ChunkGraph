@@ -43,6 +43,7 @@ def check_privileges(elevated_flag: bool) -> None:
                 logger.info(f"[{os.getpid()}] - Original process exiting.")
                 sys.exit(1)
             else:
+                print()
                 logger.info(f"Privileges elevated successfully {os.getpid()}. Exiting original instance.")
                 sys.exit(0)  # Successfully elevated privileges, exit original instance
         except Exception as e:
@@ -50,7 +51,7 @@ def check_privileges(elevated_flag: bool) -> None:
             sys.exit(1)
         return  # This return is redundant because sys.exit() is above.
     elif current_euid == 0:
-        logger.info(f"Script {os.getpid()} is running with elevated privileges.")
+        logger.info(f"Launched {os.getpid()} with elevated privileges.")
     else:
         logger.info(f"Script {os.getpid()} is running as an elevated instance.")
 
@@ -74,7 +75,7 @@ def validate_output_directory(output_dir: str) -> None:
     else:
         logger.info(f"Validated output directory:\n\t{output_dir}")
 
-def run_program_and_blktrace(framework: str, binary_args: List[str], device: str, output_dir: str) -> None:
+def run_program_and_blktrace(framework: str, binary_args: List[str], device_path: str, output_dir: str) -> None:
     """
     Runs a program and starts blktrace on a specified device.
 
@@ -109,30 +110,32 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device: str
         logger.error(f"Program not found:\n\t'{binary_args[0]}'")
         sys.exit(1)
     
-    logger.info(f"Program started with PID: {program_proc.pid}")
+    logger.info(f"Program started with PID: {program_proc.pid}\n")
 
     # Start blktrace.
-    blktrace_output_file: str = os.path.join(output_dir, "blktrace_trace")
-    logger.info(f"Starting blktrace on device '{device}'...")
-    blktrace_stdout_path: str = os.path.join(output_dir, f"blktrace_stdout.log")
-    blktrace_stderr_path: str = os.path.join(output_dir, f"blktrace_stderr.log")
+    #blktrace_output_file: str = os.path.join(output_dir, "blktrace_trace")
+    bltrace_output_dir_path: str = output_dir
+    blktrace_stdout_path: str = os.path.join(bltrace_output_dir_path, f"blktrace_stdout.log")
+    blktrace_stderr_path: str = os.path.join(bltrace_output_dir_path, f"blktrace_stderr.log")
     blktrace_stdout: IO = open(blktrace_stdout_path, 'w')
     blktrace_stderr: IO = open(blktrace_stderr_path, 'w')
     try:
         logger.info(f"Effective UID for 'blktrace': {os.geteuid()}")
+        blktrace_args: List[str] = ["blktrace", "-d", device_path, f"--output-dir={bltrace_output_dir_path}"]
+        logger.info(f"Starting blktrace on device '{device_path}'...\n\t{' '.join(blktrace_args)}")
         blktrace_proc: subprocess.Popen = subprocess.Popen(
             #["sudo", "blktrace", "-d", device, "-o", blktrace_output_file],
-            ["sudo", "blktrace", "-d", device, f"--output-dir={output_dir}"],
+            #["sudo", "blktrace", "-d", device, f"--output-dir={bltrace_output_dir_path}"],
+            blktrace_args,
             stdout=blktrace_stdout,
             stderr=blktrace_stderr,
             text=True
         )
+        logger.info(f"blktrace started with PID: {blktrace_proc.pid}")
     except FileNotFoundError:
         logger.error("blktrace not found. Ensure it is installed and available in the PATH.")
         program_proc.terminate()
         sys.exit(1)
-    
-    logger.info(f"blktrace started with PID: {blktrace_proc.pid}")
 
     # Wait for the program to finish
     program_proc.wait()
@@ -158,14 +161,30 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device: str
     blktrace_stdout.close()
     blktrace_stderr.close()
 
-    logger.info(f"blktrace finished with exit code: {blktrace_proc.returncode}")
+    
 
-    logger.info(f"blktrace output saved to: {blktrace_output_file}")
+    if blktrace_proc.returncode == 0:
+        logger.info(f"blktrace finished with exit code: {blktrace_proc.returncode}")
+    else:
+        logger.error(f"blktrace finished with exit code: {blktrace_proc.returncode}")
+        logger.error(f"Exiting due to blktrace error.")
+        sys.exit(1)
+        
+
+    logger.info(f"blktrace output saved to directory:\n\t{bltrace_output_dir_path}")
+
+    #sys.exit(0)
 
     # Output 'blktrace' statistics.
     # Step 1: Merge per-CPU files
-    merge_target_path: str = os.path.join(output_dir, "blktrace_merged_trace.txt")
-    merge_blktrace_files(output_dir, merge_target_path)
+    print()
+    logger.info(f"Effective UID for 'blkparse': {os.geteuid()}")
+    device: str = device_path[device_path.rfind(os.path.sep) + 1 :]
+    merge_target_path: str = os.path.join(output_dir, f"{device}.blktrace.merged.txt")
+    logger.info(f"Starting blkparse to create:\n\t{merge_target_path}")
+    merge_blktrace_files(output_dir, device, merge_target_path)
+
+    sys.exit(0)
 
     # Step 2: Parse the merged output
     df = parse_blkparse_output(merge_target_path)
@@ -176,7 +195,7 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device: str
     # Step 4: Visualize per CPU
     visualize_per_cpu(df)
 
-def merge_blktrace_files(blktrace_dir: str, output_file: str) -> None:
+def merge_blktrace_files(blktrace_dir: str, device: str, output_file: str) -> None:
     """
     Merges per-CPU blktrace files into a unified trace file using blkparse.
 
@@ -186,13 +205,16 @@ def merge_blktrace_files(blktrace_dir: str, output_file: str) -> None:
     """
     try:
         # Merge all blktrace files (e.g., blktrace.cpu0, blktrace.cpu1, ...)
+        blkparse_args: List[str] = ["blkparse", "-i", f"{blktrace_dir}/{device}.blktrace.*", "-o", output_file]
         subprocess.run(
-            ["blkparse", "-i", f"{blktrace_dir}/blktrace.cpu*", "-o", output_file],
-            check=True
+            blkparse_args,
+            #["blkparse", "-i", f"{blktrace_dir}/blktrace.cpu*", "-o", output_file],
+            check=True,
+            text=True
         )
-        print(f"[INFO] Merged blktrace output saved to {output_file}")
+        logger.info(f"Merged blktrace output saved to\n\t{output_file}")
     except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Failed to merge blktrace files: {e}")
+        logger.error(f"blkparse exception:\n\t{e}\n\t{' '.join(blkparse_args)}")
 
 def parse_blkparse_output(file_path: str) -> pd.DataFrame:
     """
@@ -264,7 +286,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
     parser: argparse.ArgumentParser = argparse.ArgumentParser(description="Launch a program and monitor device I/O with blktrace.")
 
     parser.add_argument(
-        "-d", "--device", required=True,
+        "-d", "--device-path", required=True,
         help="Path to the device to be monitored by blktrace (e.g., /dev/sda)."
     )
     parser.add_argument(
@@ -290,7 +312,13 @@ def create_arg_parser() -> argparse.ArgumentParser:
 
     return parser
 
-# python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "$HOME/chunk_graph_blktrace_test" --device "/dev/nvme0n1p1" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
+# python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "$HOME/chunk_graph_blktrace_test" --device-path "/dev/nvme0n1p1" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
+
+# python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-LiveJournal-test" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
+
+# python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-LiveJournal-test" --device-path "/dev/sdb2" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
+
+
 def main():
 
     # Parse arguments.
@@ -304,7 +332,7 @@ def main():
 
     # Validate inputs.
     logger.info(f"Current PID: {os.getpid()}, Elevated: {args.elevated}")
-    validate_device(args.device)
+    validate_device(args.device_path)
     logger.info(f"Current PID: {os.getpid()}, Elevated: {args.elevated}")
     validate_output_directory(args.output_dir)
 
@@ -318,7 +346,7 @@ def main():
     logger.info(f"Framework: {args.framework}")
     logger.info(f"Graph algorithm program:\n\t{binary_path}")
     
-    run_program_and_blktrace(args.framework, binary_args, args.device, args.output_dir)
+    run_program_and_blktrace(args.framework, binary_args, args.device_path, args.output_dir)
 
 if __name__ == "__main__":
     main()
