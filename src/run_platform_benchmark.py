@@ -5,10 +5,12 @@ import pprint
 import subprocess
 import sys
 import time
-from typing import Any, IO, List
+from typing import Any, IO, List, Optional
 
-import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
 
 SCRIPT_DIR: str = os.path.dirname(os.path.abspath(__file__))
 FRAMEWORKS_DIR: str = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "frameworks"))
@@ -137,7 +139,7 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
         program_proc.terminate()
         sys.exit(1)
 
-    # Wait for the program to finish
+    # Wait for the program to finish.
     program_proc.wait()
     program_stdout.close()
     program_stderr.close()
@@ -145,7 +147,7 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     
     logger.info(f"Program finished with exit code: {program_proc.returncode}")
 
-    # Stop blktrace
+    # Stop blktrace.
     logger.info("Stopping blktrace...")
 
     blktrace_proc.terminate()
@@ -161,19 +163,14 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     blktrace_stdout.close()
     blktrace_stderr.close()
 
-    
-
     if blktrace_proc.returncode == 0:
         logger.info(f"blktrace finished with exit code: {blktrace_proc.returncode}")
     else:
         logger.error(f"blktrace finished with exit code: {blktrace_proc.returncode}")
         logger.error(f"Exiting due to blktrace error.")
         sys.exit(1)
-        
 
     logger.info(f"blktrace output saved to directory:\n\t{bltrace_output_dir_path}")
-
-    #sys.exit(0)
 
     # Output 'blktrace' statistics.
     # Step 1: Merge per-CPU files
@@ -185,14 +182,31 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     merge_blktrace_files(device, merge_target_path, output_dir)
 
     # Step 2: Parse the merged output
-    df: pd.DataFrame = parse_blkparse_output(merge_target_path)
+    pids: List[int] = [program_proc.pid]
+    df: pd.DataFrame = parse_blkparse_output(merge_target_path, pids)
 
-    # Step 3: Visualize overview
+    # Filter by relevant process IDs.
+
+
+    # Step 3: Visualize 'blktrace' data.
     plot_basename: str = f"{device}.blktrace"
-    visualize_overview(df, plot_basename, output_dir)
 
-    # Step 4: Visualize per CPU
-    visualize_per_cpu(df, plot_basename, output_dir)
+    # Visualize throughput
+    f"{plot_basename}-"
+    visualize_throughput_overview(df, f"{plot_basename}-throughput", output_dir)
+    visualize_throughput_per_cpu(df, f"{plot_basename}-throughput", output_dir)
+
+    #sys.exit()
+
+    # Visualize latencies.
+    # TODO: print these plots with histogram bars rather than a curve
+    visualize_latency_overview(df, f"{plot_basename}-latency", output_dir)
+    visualize_latency_per_cpu(df, f"{plot_basename}-latency", output_dir)
+
+    # Visualize queue depth.
+    # TODO: add dynamic binning as well and check if histograms make sense. 
+    visualize_queue_depth_overview(df, f"{plot_basename}-q_depth", output_dir)
+    visualize_queue_depth_per_cpu(df, f"{plot_basename}-q_depth", output_dir)
 
 def merge_blktrace_files(device: str, output_file: str, blktrace_dir: str) -> None:
     """
@@ -215,7 +229,7 @@ def merge_blktrace_files(device: str, output_file: str, blktrace_dir: str) -> No
     except subprocess.CalledProcessError as e:
         logger.error(f"blkparse exception:\n\t{e}\n\t{' '.join(blkparse_args)}")
 
-def parse_blkparse_output(file_path: str) -> pd.DataFrame:
+def parse_blkparse_output(file_path: str, pids: List[int]) -> pd.DataFrame:
     """
     Parses blkparse output into a DataFrame.
 
@@ -226,95 +240,953 @@ def parse_blkparse_output(file_path: str) -> pd.DataFrame:
         pd.DataFrame: Parsed data with columns for timestamp, CPU, operation, etc.
     """
     data: pd.DataFrame = []
+
     with open(file_path, "r") as f:
         for line in f:
             line: str
             parts: List[str] = line.split()
             if len(parts) > 6 and parts[3].replace(".", "").isdigit():
-                timestamp: float = float(parts[3])
-                cpu: int = int(parts[1])  # CPU ID
-                operation = parts[6]
-                data.append({"timestamp": timestamp, "cpu": cpu, "operation": operation})
+                try:
+                    timestamp: float = float(parts[3])
+                    cpu: int = int(parts[1])  # CPU ID
+                    event_type: str = parts[5]
+                    operation: str = parts[6]
+                    
+                    # Ensure LBA is a valid integer
+                    lba: Optional[int] = int(parts[7]) if len(parts) > 7 and parts[7].isdigit() else None
+                    
+                    # Ensure blocks are valid
+                    blocks: Optional[int] = int(parts[9][1:]) if len(parts) > 9 and parts[9].startswith("+") else None
+
+                    # Append the parsed data
+                    data.append({
+                        "timestamp": timestamp,
+                        "cpu": cpu,
+                        "event_type": event_type,
+                        "operation": operation,
+                        "lba": lba,
+                        "blocks": blocks,
+                    })
+                except ValueError as e:
+                    # Log or print the line causing the issue (optional for debugging)
+                    print(f"Skipping line due to error: {line.strip()} - {e}")
+                    continue
     return pd.DataFrame(data)
 
-def visualize_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+def visualize_throughput_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
     """
-    Generates an overview plot of throughput over time across all CPUs.
+    Generates an overview plot of throughput over time across all CPUs, using timestamp-based, dynamic binning, and 1-second binning.
 
     Args:
         df (pd.DataFrame): DataFrame with blkparse events.
+        plot_basename (str): Basename for the plot output file.
+        output_dir (str): Directory to save the plots.
     """
-    # Group by time (in seconds) for throughput
-    df["time_bin"] = (df["timestamp"] // 1).astype(int)
-    #throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("time_bin").size()
-    throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("timestamp").size()
+    # Plot using raw timestamps (original method)
+    throughput_timestamp = df.groupby("timestamp").size()
 
-    # Plot
+    # Timestamp-based throughput
     plt.figure(figsize=(10, 6))
-    plt.plot(throughput.index, throughput.values, label="Throughput (IOPS)")
-    print(throughput.head())  # Check first few rows
-    print("X-axis values (Time bins):")
-    print(throughput.index)
-    print("Y-axis values (IOPS):")
-    print(throughput.values)
+    plt.plot(throughput_timestamp.index, throughput_timestamp.values, label="Throughput (IOPS)")
+    print("Throughput (timestamp-based):")
+    print(throughput_timestamp.head())
 
-    print(df)
-
-    if throughput.empty:
-        print(f"No data to plot. Skipping...")
-        return
-
-    # Make sure the X-axis starts from 0
-    plt.xlim(left=0)
-    
-    plt.title("Overall Throughput Over Time")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Throughput (IOPS)")
-    plt.legend()
-    plt.grid()
-
-    png_out_path: str = os.path.join(output_dir, f"{plot_basename}.png")
-    plt.savefig(png_out_path, dpi=300)
-    pdf_out_path: str = os.path.join(output_dir, f"{plot_basename}.pdf")
-    plt.savefig(pdf_out_path)
-
-def visualize_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
-    """
-    Generates per-CPU visualizations of throughput over time.
-
-    Args:
-        df (pd.DataFrame): DataFrame with blkparse events.
-    """
-    # Group data by CPU
-    grouped = df.groupby("cpu")
-    for cpu, cpu_data in grouped:
-        cpu_data["time_bin"] = (cpu_data["timestamp"] // 1).astype(int)
-        throughput: Any[pd.DataFrame, pd.Series[int]] = cpu_data.groupby("time_bin").size()
-
-        # Plot
-        plt.figure(figsize=(10, 6))
-        plt.plot(throughput.index, throughput.values, label=f"CPU {cpu} Throughput (IOPS)")
-        print(throughput.head())  # Check first few rows
-
-        if throughput.empty:
-            print(f"No data to plot for CPU {cpu}. Skipping...")
-            continue  # Skip if no data is available
-
-        # Make sure the X-axis starts from 0
-        plt.xlim(left=0)
-
-        plt.title(f"Throughput Over Time for CPU {cpu}")
+    if throughput_timestamp.empty:
+        print(f"No data to plot for timestamp-based throughput. Skipping...")
+    else:
+        plt.title("Overall Throughput Over Time (Timestamp-Based)")
         plt.xlabel("Time (s)")
         plt.ylabel("Throughput (IOPS)")
         plt.legend()
         plt.grid()
-
-        png_out_path: str = os.path.join(output_dir, f"{plot_basename}.{cpu}.png")
+        plt.xlim(left=0)
+        png_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_timestamp_binning.png")
         plt.savefig(png_out_path, dpi=300)
-        pdf_out_path: str = os.path.join(output_dir, f"{plot_basename}.{cpu}.pdf")
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_timestamp_binning.pdf")
         plt.savefig(pdf_out_path)
+        plt.close()
+
+    # 1-second binning logic
+    #df["time_bin_1s"] = (df["timestamp"] // 1).astype(int)  # Floor timestamps to nearest second
+
+    # TODO: check why this is true: The negative X-axis values indicate an issue with how the binning for time_bin_1s is being calculated. Specifically, the timestamp column may contain negative or very small values that result in negative bin indices when using (df["timestamp"] // 1).
+    df["time_bin_1s"] = ((df["timestamp"] - df["timestamp"].min()) // 1).astype(int)
+
+    throughput_1s = df.groupby("time_bin_1s").size()
+
+    if throughput_1s.empty:
+        print(f"No data to plot for 1-second binning. Skipping...")
+    else:
+        plt.figure(figsize=(10, 6))
+        plt.plot(throughput_1s.index, throughput_1s.values, label="Throughput (IOPS, 1s Binning)")
+        print("Throughput (1-second binning):")
+        print(throughput_1s.head())
+
+        plt.title("Overall Throughput Over Time (1-Second Binning)")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Throughput (IOPS)")
+        plt.legend()
+        plt.grid()
+        png_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_1s_binning.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_1s_binning.pdf")
+        plt.savefig(pdf_out_path)
+        plt.close()
+
+    # Dynamic binning logic
+    min_timestamp = df["timestamp"].min()
+    max_timestamp = df["timestamp"].max()
+
+    if pd.isna(min_timestamp) or pd.isna(max_timestamp):
+        print(f"No data available for dynamic binning. Skipping...")
+        return
+
+    time_range = max_timestamp - min_timestamp
+
+    if time_range == 0:
+        print(f"No variation in timestamps (all data at {min_timestamp}s). Skipping dynamic binning...")
+        return
+
+    # Determine dynamic bin size
+    #     The dynamic binning logic groups timestamps into wider intervals (bins) based on the range of data and the chosen number of bins (num_bins=50). Wider bins aggregate events that fall within the same time interval, which can result in varying throughput values for each bin:
+
+    #     If a bin has multiple events, the throughput will be higher.
+    #     If a bin has fewer events, the throughput will be lower.
+
+    # This variability produces the observed curve in the "dynamic_binning" plot.
+    num_bins = 50  # Default number of bins
+    bin_size = time_range / num_bins
+    print(f"Dynamic bin size: {bin_size:.6f} seconds")
+
+    # Create time bins and calculate throughput
+    df["time_bin_dynamic"] = ((df["timestamp"] - min_timestamp) / bin_size).astype(int)
+    throughput_dynamic = df.groupby("time_bin_dynamic").size()
+    x_values_dynamic = throughput_dynamic.index * bin_size + min_timestamp
+
+    if throughput_dynamic.empty:
+        print(f"No data to plot for dynamically binned throughput. Skipping...")
+        return
+
+    # Plot dynamically binned throughput
+    plt.figure(figsize=(10, 6))
+    plt.plot(x_values_dynamic, throughput_dynamic.values, label="Throughput (IOPS)")
+    print("Throughput (dynamic binning):")
+    print(throughput_dynamic.head())
+
+    plt.title("Overall Throughput Over Time (Dynamic Binning)")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Throughput (IOPS)")
+    plt.legend()
+    plt.grid()
+    png_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_dynamic_binning.png")
+    plt.savefig(png_out_path, dpi=300)
+    pdf_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_dynamic_binning.pdf")
+    plt.savefig(pdf_out_path)
+    plt.close()
+
+# def visualize_throughput_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates an overview plot of throughput over time across all CPUs, using both timestamp-based and dynamic binning.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#         plot_basename (str): Basename for the plot output file.
+#         output_dir (str): Directory to save the plots.
+#     """
+#     # Plot using raw timestamps (original method)
+#     throughput_timestamp = df.groupby("timestamp").size()
+
+#     # Original method: Throughput plot by timestamp
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(throughput_timestamp.index, throughput_timestamp.values, label="Throughput (IOPS)")
+#     print("Throughput (timestamp-based):")
+#     print(throughput_timestamp.head())
+
+#     if throughput_timestamp.empty:
+#         print(f"No data to plot for timestamp-based throughput. Skipping...")
+#     else:
+#         plt.title("Overall Throughput Over Time (Timestamp-Based)")
+#         plt.xlabel("Time (s)")
+#         plt.ylabel("Throughput (IOPS)")
+#         plt.legend()
+#         plt.grid()
+#         png_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_timestamp_binning.png")
+#         plt.savefig(png_out_path, dpi=300)
+#         pdf_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_timestamp_binning.pdf")
+#         plt.savefig(pdf_out_path)
+#         plt.close()
+
+#     # Dynamic binning logic
+#     min_timestamp = df["timestamp"].min()
+#     max_timestamp = df["timestamp"].max()
+
+#     if pd.isna(min_timestamp) or pd.isna(max_timestamp):
+#         print(f"No data available for dynamic binning. Skipping...")
+#         return
+
+#     time_range = max_timestamp - min_timestamp
+
+#     if time_range == 0:
+#         print(f"No variation in timestamps (all data at {min_timestamp}s). Skipping dynamic binning...")
+#         return
+
+#     # Determine dynamic bin size
+#     num_bins = 50  # Default number of bins
+#     bin_size = time_range / num_bins
+#     print(f"Dynamic bin size: {bin_size:.6f} seconds")
+
+#     # Create time bins and calculate throughput
+#     df["time_bin"] = ((df["timestamp"] - min_timestamp) / bin_size).astype(int)
+#     throughput_dynamic = df.groupby("time_bin").size()
+#     x_values_dynamic = throughput_dynamic.index * bin_size + min_timestamp
+
+#     if throughput_dynamic.empty:
+#         print(f"No data to plot for dynamically binned throughput. Skipping...")
+#         return
+
+#     # Plot dynamically binned throughput
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(x_values_dynamic, throughput_dynamic.values, label="Throughput (IOPS)")
+#     print("Throughput (dynamic binning):")
+#     print(throughput_dynamic.head())
+
+#     plt.title("Overall Throughput Over Time (Dynamic Binning)")
+#     plt.xlabel("Time (s)")
+#     plt.ylabel("Throughput (IOPS)")
+#     plt.legend()
+#     plt.grid()
+#     png_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_dynamic_binning.png")
+#     plt.savefig(png_out_path, dpi=300)
+#     pdf_out_path = os.path.join(output_dir, f"{plot_basename}_IOPS_dynamic_binning.pdf")
+#     plt.savefig(pdf_out_path)
+#     plt.close()
 
 
+# def visualize_throughput_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates an overview plot of throughput over time across all CPUs.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#     """
+#     # Group by time (in seconds) for throughput
+#     df["time_bin"] = (df["timestamp"] // 1).astype(int)
+
+#     # For plotting throughput over time, always group by time intervals using 
+#     # time_bin to align with the definition of throughput (e.g., IOPS).
+#     #throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("time_bin").size()
+#     throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("timestamp").size()
+
+#     # Plot.
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(throughput.index, throughput.values, label="Throughput (IOPS)")
+#     print(throughput.head())  # Check first few rows
+#     print("X-axis values (Time bins):")
+#     print(throughput.index)
+#     print("Y-axis values (IOPS):")
+#     print(throughput.values)
+
+#     # Debugging: Print data and grouping results
+#     print("Parsed DataFrame:")
+#     print(df.head())
+#     print("Throughput Data:")
+#     print(throughput.head())
+
+#     if throughput.empty:
+#         print(f"No data to plot. Skipping...")
+#         return
+
+#     # Make sure the X-axis starts from 0.
+#     plt.xlim(left=0)
+    
+#     plt.title("Overall Throughput Over Time")
+#     plt.xlabel("Time (s)")
+#     plt.ylabel("Throughput (IOPS)")
+#     plt.legend()
+#     plt.grid()
+
+#     png_out_path: str = os.path.join(output_dir, f"{plot_basename}_per_second_(IOPS).png")
+#     plt.savefig(png_out_path, dpi=300)
+#     pdf_out_path: str = os.path.join(output_dir, f"{plot_basename}_per_second_(IOPS).pdf")
+#     plt.savefig(pdf_out_path)
+#     plt.close()
+
+def visualize_throughput_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+    """
+    Generates per-CPU visualizations of throughput over time using timestamp-based, 1-second binning, and dynamic binning.
+
+    Args:
+        df (pd.DataFrame): DataFrame with blkparse events.
+        plot_basename (str): Basename for the plot output file.
+        output_dir (str): Directory to save the plots.
+    """
+    # Group data by CPU.
+    grouped = df.groupby("cpu")
+    for cpu, cpu_data in grouped:
+        # Plot using raw timestamps (original method)
+        throughput_timestamp = cpu_data.groupby("timestamp").size()
+
+        # Timestamp-based throughput
+        plt.figure(figsize=(10, 6))
+        plt.plot(throughput_timestamp.index, throughput_timestamp.values, label=f"CPU {cpu} Throughput (IOPS)")
+        print(f"Throughput (timestamp-based) for CPU {cpu}:")
+        print(throughput_timestamp.head())
+
+        if throughput_timestamp.empty:
+            print(f"No data to plot for CPU {cpu} (timestamp-based). Skipping...")
+        else:
+            plt.title(f"Throughput Over Time for CPU {cpu} (Timestamp-Based)")
+            plt.xlabel("Time (s)")
+            plt.ylabel("Throughput (IOPS)")
+            plt.legend()
+            plt.grid()
+            png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_timestamp_binning.png")
+            plt.savefig(png_out_path, dpi=300)
+            pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_timestamp_binning.pdf")
+            plt.savefig(pdf_out_path)
+            plt.close()
+
+        # 1-second binning logic
+        cpu_data["time_bin_1s"] = (cpu_data["timestamp"] // 1).astype(int)  # Floor timestamps to nearest second
+        throughput_1s = cpu_data.groupby("time_bin_1s").size()
+
+        if throughput_1s.empty:
+            print(f"No data to plot for CPU {cpu} (1-second binning). Skipping...")
+        else:
+            plt.figure(figsize=(10, 6))
+            plt.plot(throughput_1s.index, throughput_1s.values, label=f"CPU {cpu} Throughput (IOPS, 1s Binning)")
+            print(f"Throughput (1-second binning) for CPU {cpu}:")
+            print(throughput_1s.head())
+
+            plt.title(f"Throughput Over Time for CPU {cpu} (1-Second Binning)")
+            plt.xlabel("Time (s)")
+            plt.ylabel("Throughput (IOPS)")
+            plt.legend()
+            plt.grid()
+            png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_1s_binning.png")
+            plt.savefig(png_out_path, dpi=300)
+            pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_1s_binning.pdf")
+            plt.savefig(pdf_out_path)
+            plt.close()
+
+        # Dynamic binning logic
+        min_timestamp = cpu_data["timestamp"].min()
+        max_timestamp = cpu_data["timestamp"].max()
+
+        if pd.isna(min_timestamp) or pd.isna(max_timestamp):
+            print(f"No data available for CPU {cpu} (dynamic binning). Skipping...")
+            continue
+
+        time_range = max_timestamp - min_timestamp
+
+        if time_range == 0:
+            print(f"No variation in timestamps for CPU {cpu} (all data at {min_timestamp}s). Skipping dynamic binning...")
+            continue
+
+        # Determine dynamic bin size
+        num_bins = 50  # Default number of bins
+        bin_size = time_range / num_bins
+        print(f"Dynamic bin size for CPU {cpu}: {bin_size:.6f} seconds")
+
+        # Create time bins and calculate throughput
+        cpu_data["time_bin_dynamic"] = ((cpu_data["timestamp"] - min_timestamp) / bin_size).astype(int)
+        throughput_dynamic = cpu_data.groupby("time_bin_dynamic").size()
+        x_values_dynamic = throughput_dynamic.index * bin_size + min_timestamp
+
+        if throughput_dynamic.empty:
+            print(f"No data to plot for CPU {cpu} (dynamic binning). Skipping...")
+            continue
+
+        # Plot dynamically binned throughput
+        plt.figure(figsize=(10, 6))
+        plt.plot(x_values_dynamic, throughput_dynamic.values, label=f"CPU {cpu} Throughput (IOPS)")
+        print(f"Throughput (dynamic binning) for CPU {cpu}:")
+        print(throughput_dynamic.head())
+
+        plt.title(f"Throughput Over Time for CPU {cpu} (Dynamic Binning)")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Throughput (IOPS)")
+        plt.legend()
+        plt.grid()
+        png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_dynamic_binning.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_dynamic_binning.pdf")
+        plt.savefig(pdf_out_path)
+        plt.close()
+
+
+# def visualize_throughput_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates per-CPU visualizations of throughput over time using both timestamp-based and dynamic binning.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#         plot_basename (str): Basename for the plot output file.
+#         output_dir (str): Directory to save the plots.
+#     """
+#     # Group data by CPU.
+#     grouped = df.groupby("cpu")
+#     for cpu, cpu_data in grouped:
+#         # Plot using raw timestamps (original method)
+#         throughput_timestamp = cpu_data.groupby("timestamp").size()
+
+#         # Original method: Throughput plot by timestamp
+#         plt.figure(figsize=(10, 6))
+#         plt.plot(throughput_timestamp.index, throughput_timestamp.values, label=f"CPU {cpu} Throughput (IOPS)")
+#         print(f"Throughput (timestamp-based) for CPU {cpu}:")
+#         print(throughput_timestamp.head())
+
+#         if throughput_timestamp.empty:
+#             print(f"No data to plot for CPU {cpu} (timestamp-based). Skipping...")
+#         else:
+#             plt.title(f"Throughput Over Time for CPU {cpu} (Timestamp-Based)")
+#             plt.xlabel("Time (s)")
+#             plt.ylabel("Throughput (IOPS)")
+#             plt.legend()
+#             plt.grid()
+#             png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_timestamp_binning.png")
+#             plt.savefig(png_out_path, dpi=300)
+#             pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_timestamp_binning.pdf")
+#             plt.savefig(pdf_out_path)
+#             plt.close()
+
+#         # Dynamic binning logic
+#         min_timestamp = cpu_data["timestamp"].min()
+#         max_timestamp = cpu_data["timestamp"].max()
+
+#         if pd.isna(min_timestamp) or pd.isna(max_timestamp):
+#             print(f"No data available for CPU {cpu} (dynamic binning). Skipping...")
+#             continue
+
+#         time_range = max_timestamp - min_timestamp
+
+#         if time_range == 0:
+#             print(f"No variation in timestamps for CPU {cpu} (all data at {min_timestamp}s). Skipping dynamic binning...")
+#             continue
+
+#         # Determine dynamic bin size
+#         num_bins = 50  # Default number of bins
+#         bin_size = time_range / num_bins
+#         print(f"Dynamic bin size for CPU {cpu}: {bin_size:.6f} seconds")
+
+#         # Create time bins and calculate throughput
+#         cpu_data["time_bin"] = ((cpu_data["timestamp"] - min_timestamp) / bin_size).astype(int)
+#         throughput_dynamic = cpu_data.groupby("time_bin").size()
+#         x_values_dynamic = throughput_dynamic.index * bin_size + min_timestamp
+
+#         if throughput_dynamic.empty:
+#             print(f"No data to plot for CPU {cpu} (dynamic binning). Skipping...")
+#             continue
+
+#         # Plot dynamically binned throughput
+#         plt.figure(figsize=(10, 6))
+#         plt.plot(x_values_dynamic, throughput_dynamic.values, label=f"CPU {cpu} Throughput (IOPS)")
+#         print(f"Throughput (dynamic binning) for CPU {cpu}:")
+#         print(throughput_dynamic.head())
+
+#         plt.title(f"Throughput Over Time for CPU {cpu} (Dynamic Binning)")
+#         plt.xlabel("Time (s)")
+#         plt.ylabel("Throughput (IOPS)")
+#         plt.legend()
+#         plt.grid()
+#         png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_dynamic_binning.png")
+#         plt.savefig(png_out_path, dpi=300)
+#         pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_IOPS_dynamic_binning.pdf")
+#         plt.savefig(pdf_out_path)
+#         plt.close()
+
+
+# def visualize_throughput_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates per-CPU visualizations of throughput over time.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#     """
+#     # Group data by CPU.
+#     grouped = df.groupby("cpu")
+#     for cpu, cpu_data in grouped:
+#         cpu_data["time_bin"] = (cpu_data["timestamp"] // 1).astype(int)
+
+#         # For plotting throughput over time, always group by time intervals using 
+#         # time_bin to align with the definition of throughput (e.g., IOPS).
+#         #throughput: Any[pd.DataFrame, pd.Series[int]] = cpu_data.groupby("time_bin").size()
+#         throughput: Any[pd.DataFrame, pd.Series[int]] = df.groupby("timestamp").size()
+
+#         # TODO: operate only on data from the PID of the graph processing out-of-core framework.
+
+#         # Plot.
+#         plt.figure(figsize=(10, 6))
+#         plt.plot(throughput.index, throughput.values, label=f"CPU {cpu} Throughput (IOPS)")
+#         #print(throughput.head())  # Check first few rows
+
+#         if throughput.empty:
+#             print(f"No data to plot for CPU {cpu}. Skipping...")
+#             continue  # Skip if no data is available
+
+#         # Make sure the X-axis starts from 0.
+#         plt.xlim(left=0)
+
+#         plt.title(f"Throughput Over Time for CPU {cpu}")
+#         plt.xlabel("Time (s)")
+#         plt.ylabel("Throughput (IOPS)")
+#         plt.legend()
+#         plt.grid()
+
+#         png_out_path: str = os.path.join(output_dir, f"{plot_basename}.{cpu}.png")
+#         plt.savefig(png_out_path, dpi=300)
+#         pdf_out_path: str = os.path.join(output_dir, f"{plot_basename}.{cpu}.pdf")
+#         plt.savefig(pdf_out_path)
+#         plt.close()
+
+def visualize_latency_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+    """
+    Generates an overview plot of latency over time across all CPUs with three binning methods.
+
+    Args:
+        df (pd.DataFrame): DataFrame with blkparse events.
+        plot_basename (str): Basename for the plot output file.
+        output_dir (str): Directory to save the plots.
+    """
+    # Calculate latency (difference between 'Q' and 'C' events)
+    queued = df[df["event_type"] == "Q"].set_index(["lba", "cpu"])
+    completed = df[df["event_type"] == "C"].set_index(["lba", "cpu"])
+    merged = queued.merge(completed, on=["lba", "cpu"], suffixes=("_q", "_c"))
+
+    # Compute latency
+    merged["latency"] = merged["timestamp_c"] - merged["timestamp_q"]
+    valid_latencies = merged[merged["latency"] >= 0]["latency"]
+
+    if valid_latencies.empty:
+        print(f"Did not print the following due to no data:\n\t{plot_basename}")
+        return
+    
+    # Static Binning (Uniform).
+    # Uniform bins across the full range of latency values.
+    plt.figure(figsize=(10, 6))
+    plt.hist(valid_latencies, bins=50, edgecolor="black", label="Latency Distribution")
+    plt.title("Overall Latency Distribution (Static Binning)")
+    plt.xlabel("Latency (s)")
+    plt.ylabel("Frequency")
+    plt.legend()
+    plt.grid()
+    png_out_path = os.path.join(output_dir, f"{plot_basename}_50_static_binning.png")
+    plt.savefig(png_out_path, dpi=300)
+    pdf_out_path = os.path.join(output_dir, f"{plot_basename}_50_static_binning.pdf")
+    plt.savefig(pdf_out_path)
+    plt.close()
+
+    # Dynamic Binning (Range).
+    # Dynamic Binning: Uniform bins, but limited to the range of the latency values (minimum to maximum).
+    plt.figure(figsize=(10, 6))
+    plt.hist(valid_latencies, bins=50, range=(valid_latencies.min(), valid_latencies.max()), edgecolor="black", label="Latency Distribution")
+    plt.title("Overall Latency Distribution (Dynamic Binning)")
+    plt.xlabel("Latency (s)")
+    plt.ylabel("Frequency")
+    plt.legend()
+    plt.grid()
+    png_out_path = os.path.join(output_dir, f"{plot_basename}_50_dynamic_binning.png")
+    plt.savefig(png_out_path, dpi=300)
+    pdf_out_path = os.path.join(output_dir, f"{plot_basename}_50_dynamic_binning.pdf")
+    plt.savefig(pdf_out_path)
+    plt.close()
+
+    # Logarithmic Binning.
+    # Logarithmic bins for a more detailed view of large ranges.
+    bins = np.logspace(np.log10(valid_latencies.min()), np.log10(valid_latencies.max()), 50)
+    plt.figure(figsize=(10, 6))
+    plt.hist(valid_latencies, bins=bins, edgecolor="black", label="Latency Distribution")
+    plt.xscale("log")
+    plt.title("Overall Latency Distribution (Logarithmic Binning)")
+    plt.xlabel("Latency (s, log scale)")
+    plt.ylabel("Frequency")
+    plt.legend()
+    plt.grid()
+    png_out_path = os.path.join(output_dir, f"{plot_basename}_log.png")
+    plt.savefig(png_out_path, dpi=300)
+    pdf_out_path = os.path.join(output_dir, f"{plot_basename}_log.pdf")
+    plt.savefig(pdf_out_path)
+    plt.close()
+
+
+# def visualize_latency_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates an overview plot of latency over time across all CPUs.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#         plot_basename (str): Basename for the plot output file.
+#         output_dir (str): Directory to save the plots.
+#     """
+#     # Calculate latency (difference between 'Q' and 'C' events)
+#     queued = df[df["event_type"] == "Q"].set_index(["lba", "cpu"])
+#     completed = df[df["event_type"] == "C"].set_index(["lba", "cpu"])
+#     merged = queued.merge(completed, on=["lba", "cpu"], suffixes=("_q", "_c"))
+
+#     # Compute latency
+#     merged["latency"] = merged["timestamp_c"] - merged["timestamp_q"]
+#     valid_latencies = merged[merged["latency"] >= 0]["latency"]
+
+#     if valid_latencies.empty:
+#         print(f"Did not print the following due to no data:\n\t{plot_basename}")
+#         return
+
+#     # Plot latency distribution
+#     plt.figure(figsize=(10, 6))
+#     plt.hist(valid_latencies, bins=50, edgecolor="black", label="Latency Distribution")
+#     plt.title("Overall Latency Distribution")
+#     plt.xlabel("Latency (s)")
+#     plt.ylabel("Frequency")
+#     plt.legend()
+#     plt.grid()
+
+#     # Save the plots
+#     png_out_path = os.path.join(output_dir, f"{plot_basename}.png")
+#     plt.savefig(png_out_path, dpi=300)
+#     pdf_out_path = os.path.join(output_dir, f"{plot_basename}.pdf")
+#     plt.savefig(pdf_out_path)
+#     plt.close()
+
+
+# def visualize_latency_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates an overview plot of latency over time across all CPUs.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#     """
+#     # Calculate latency (difference between 'Q' and 'C' events)
+#     queued = df[df["event_type"] == "Q"].set_index(["lba", "cpu"])
+#     completed = df[df["event_type"] == "C"].set_index(["lba", "cpu"])
+#     latency = (completed["timestamp"] - queued["timestamp"]).dropna()
+
+#     if latency.empty:
+#         print(f"Did not print the following due to no data:\n\t{plot_basename}")
+#         return
+
+#     # Plot latency distribution
+#     plt.figure(figsize=(10, 6))
+#     plt.hist(latency, bins=50, edgecolor="black", label="Latency Distribution")
+#     plt.title("Overall Latency Distribution")
+#     plt.xlabel("Latency (s)")
+#     plt.ylabel("Frequency")
+#     plt.legend()
+#     plt.grid()
+
+#     png_out_path = os.path.join(output_dir, f"{plot_basename}.png")
+#     plt.savefig(png_out_path, dpi=300)
+#     pdf_out_path = os.path.join(output_dir, f"{plot_basename}.pdf")
+#     plt.savefig(pdf_out_path)
+#     plt.close()
+
+# def visualize_latency_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates per-CPU visualizations of latency.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#     """
+#     grouped = df.groupby("cpu")
+#     for cpu, cpu_data in grouped:
+#         queued = cpu_data[cpu_data["event_type"] == "Q"].set_index("lba")
+#         completed = cpu_data[cpu_data["event_type"] == "C"].set_index("lba")
+#         latency = (completed["timestamp"] - queued["timestamp"]).dropna()
+
+#         if latency.empty:
+#             print(f"Did not print the following due to no data:\n\t{plot_basename}.{cpu}")
+#             continue
+
+#         # Plot latency distribution for this CPU
+#         plt.figure(figsize=(10, 6))
+#         plt.hist(latency, bins=50, edgecolor="black", label=f"Latency Distribution (CPU {cpu})")
+#         plt.title(f"Latency Distribution for CPU {cpu}")
+#         plt.xlabel("Latency (s)")
+#         plt.ylabel("Frequency")
+#         plt.legend()
+#         plt.grid()
+
+#         png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}.png")
+#         plt.savefig(png_out_path, dpi=300)
+#         pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}.pdf")
+#         plt.savefig(pdf_out_path)
+#         plt.close()
+
+def visualize_latency_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+    """
+    Generates per-CPU visualizations of latency with three binning methods.
+
+    Args:
+        df (pd.DataFrame): DataFrame with blkparse events.
+        plot_basename (str): Basename for the plot output file.
+        output_dir (str): Directory to save the plots.
+    """
+    grouped = df.groupby("cpu")
+    for cpu, cpu_data in grouped:
+        queued = cpu_data[cpu_data["event_type"] == "Q"].set_index("lba")
+        completed = cpu_data[cpu_data["event_type"] == "C"].set_index("lba")
+        merged = queued.merge(completed, on="lba", suffixes=("_q", "_c"))
+
+        # Compute latency
+        merged["latency"] = merged["timestamp_c"] - merged["timestamp_q"]
+        valid_latencies = merged[merged["latency"] >= 0]["latency"]
+
+        if valid_latencies.empty:
+            print(f"Did not print the following due to no data:\n\t{plot_basename}.{cpu}")
+            continue
+
+        # Static Binning (Uniform).
+        # Uniform bins across the full range of latency values.
+        plt.figure(figsize=(10, 6))
+        plt.hist(valid_latencies, bins=50, edgecolor="black", label=f"Latency Distribution (CPU {cpu})")
+        plt.title(f"Latency Distribution for CPU {cpu} (Static Binning)")
+        plt.xlabel("Latency (s)")
+        plt.ylabel("Frequency")
+        plt.legend()
+        plt.grid()
+        png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_50_static_binning.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_50_static_binning.pdf")
+        plt.savefig(pdf_out_path)
+        plt.close()
+
+        # Dynamic Binning (Range).
+        # Uniform bins, but limited to the range of the latency values (minimum to maximum).
+        plt.figure(figsize=(10, 6))
+        plt.hist(valid_latencies, bins=50, range=(valid_latencies.min(), valid_latencies.max()), edgecolor="black", label=f"Latency Distribution (CPU {cpu})")
+        plt.title(f"Latency Distribution for CPU {cpu} (Dynamic Binning)")
+        plt.xlabel("Latency (s)")
+        plt.ylabel("Frequency")
+        plt.legend()
+        plt.grid()
+        png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_50_dynamic_binning.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_50_dynamic_binning.pdf")
+        plt.savefig(pdf_out_path)
+        plt.close()
+
+        # Logarithmic Binning.
+        # Logarithmic bins for a more detailed view of large ranges.
+        bins = np.logspace(np.log10(valid_latencies.min()), np.log10(valid_latencies.max()), 50)
+        plt.figure(figsize=(10, 6))
+        plt.hist(valid_latencies, bins=bins, edgecolor="black", label=f"Latency Distribution (CPU {cpu})")
+        plt.xscale("log")
+        plt.title(f"Latency Distribution for CPU {cpu} (Logarithmic Binning)")
+        plt.xlabel("Latency (s, log scale)")
+        plt.ylabel("Frequency")
+        plt.legend()
+        plt.grid()
+        png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_log.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}_log.pdf")
+        plt.savefig(pdf_out_path)
+        plt.close()
+
+
+# def visualize_latency_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates per-CPU visualizations of latency.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#         plot_basename (str): Basename for the plot output file.
+#         output_dir (str): Directory to save the plots.
+#     """
+#     grouped = df.groupby("cpu")
+#     for cpu, cpu_data in grouped:
+#         queued = cpu_data[cpu_data["event_type"] == "Q"].set_index("lba")
+#         completed = cpu_data[cpu_data["event_type"] == "C"].set_index("lba")
+#         merged = queued.merge(completed, on="lba", suffixes=("_q", "_c"))
+
+#         # Compute latency
+#         merged["latency"] = merged["timestamp_c"] - merged["timestamp_q"]
+#         valid_latencies = merged[merged["latency"] >= 0]["latency"]
+
+#         if valid_latencies.empty:
+#             print(f"Did not print the following due to no data:\n\t{plot_basename}.{cpu}")
+#             continue
+
+#         # Plot latency distribution for this CPU
+#         plt.figure(figsize=(10, 6))
+#         plt.hist(valid_latencies, bins=50, edgecolor="black", label=f"Latency Distribution (CPU {cpu})")
+#         plt.title(f"Latency Distribution for CPU {cpu}")
+#         plt.xlabel("Latency (s)")
+#         plt.ylabel("Frequency")
+#         plt.legend()
+#         plt.grid()
+
+#         # Save the plots
+#         png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}.png")
+#         plt.savefig(png_out_path, dpi=300)
+#         pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}.pdf")
+#         plt.savefig(pdf_out_path)
+#         plt.close()
+
+def visualize_queue_depth_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+    """
+    Generates an overview plot of queue depth over time across all CPUs, using timestamp-based, dynamic binning, and 1-second binning.
+
+    Args:
+        df (pd.DataFrame): DataFrame with blkparse events.
+        plot_basename (str): Basename for the plot output file.
+        output_dir (str): Directory to save the plots.
+    """
+    # Calculate queue depth for timestamp-based binning
+    queued_timestamp = df[df["event_type"] == "Q"].groupby("timestamp").size()
+    completed_timestamp = df[df["event_type"] == "C"].groupby("timestamp").size()
+    queue_depth_timestamp = (queued_timestamp - completed_timestamp).cumsum()
+
+    # Timestamp-based queue depth
+    if queue_depth_timestamp.empty:
+        print(f"No data to plot for timestamp-based queue depth. Skipping...")
+    else:
+        plt.figure(figsize=(10, 6))
+        plt.plot(queue_depth_timestamp.index, queue_depth_timestamp.values, label="Queue Depth (Timestamp-Based)")
+        plt.title("Queue Depth Over Time (Timestamp-Based)")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Queue Depth")
+        plt.legend()
+        plt.grid()
+        plt.xlim(left=0)
+        png_out_path = os.path.join(output_dir, f"{plot_basename}_queue_depth_timestamp_binning.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}_queue_depth_timestamp_binning.pdf")
+        plt.savefig(pdf_out_path)
+        plt.close()
+
+    # 1-second binning logic
+    df["time_bin_1s"] = ((df["timestamp"] - df["timestamp"].min()) // 1).astype(int)
+    queued_1s = df[df["event_type"] == "Q"].groupby("time_bin_1s").size()
+    completed_1s = df[df["event_type"] == "C"].groupby("time_bin_1s").size()
+    queue_depth_1s = (queued_1s - completed_1s).cumsum()
+
+    print("Queued events (1-second binning):")
+    print(queued_1s.head())
+    print("Completed events (1-second binning):")
+    print(completed_1s.head())
+
+    if queue_depth_1s.empty:
+        print(f"No data to plot for 1-second binning queue depth. Skipping...")
+    else:
+        plt.figure(figsize=(10, 6))
+        plt.plot(queue_depth_1s.index, queue_depth_1s.values, label="Queue Depth (1-Second Binning)")
+        plt.title("Queue Depth Over Time (1-Second Binning)")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Queue Depth")
+        plt.legend()
+        plt.grid()
+        png_out_path = os.path.join(output_dir, f"{plot_basename}_queue_depth_1s_binning.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}_queue_depth_1s_binning.pdf")
+        plt.savefig(pdf_out_path)
+        plt.close()
+
+    # Dynamic binning logic
+    min_timestamp = df["timestamp"].min()
+    max_timestamp = df["timestamp"].max()
+
+    if pd.isna(min_timestamp) or pd.isna(max_timestamp):
+        print(f"No data available for dynamic binning. Skipping...")
+        return
+
+    time_range = max_timestamp - min_timestamp
+
+    if time_range == 0:
+        print(f"No variation in timestamps (all data at {min_timestamp}s). Skipping dynamic binning...")
+        return
+
+    num_bins = 50
+    bin_size = time_range / num_bins
+    print(f"Dynamic bin size: {bin_size:.6f} seconds")
+
+    df["time_bin_dynamic"] = ((df["timestamp"] - min_timestamp) / bin_size).astype(int)
+    queued_dynamic = df[df["event_type"] == "Q"].groupby("time_bin_dynamic").size()
+    completed_dynamic = df[df["event_type"] == "C"].groupby("time_bin_dynamic").size()
+    queue_depth_dynamic = (queued_dynamic - completed_dynamic).cumsum()
+    x_values_dynamic = queue_depth_dynamic.index * bin_size + min_timestamp
+
+    if queue_depth_dynamic.empty:
+        print(f"No data to plot for dynamically binned queue depth. Skipping...")
+        return
+
+    # Plot dynamically binned queue depth
+    plt.figure(figsize=(10, 6))
+    plt.plot(x_values_dynamic, queue_depth_dynamic.values, label="Queue Depth (Dynamic Binning)")
+    plt.title("Queue Depth Over Time (Dynamic Binning)")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Queue Depth")
+    plt.legend()
+    plt.grid()
+    png_out_path = os.path.join(output_dir, f"{plot_basename}_queue_depth_dynamic_binning.png")
+    plt.savefig(png_out_path, dpi=300)
+    pdf_out_path = os.path.join(output_dir, f"{plot_basename}_queue_depth_dynamic_binning.pdf")
+    plt.savefig(pdf_out_path)
+    plt.close()
+
+
+# def visualize_queue_depth_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+#     """
+#     Generates an overview plot of queue depth over time across all CPUs.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame with blkparse events.
+#     """
+#     # Calculate queue depth (number of outstanding 'Q' events)
+#     df["time_bin"] = (df["timestamp"] // 1).astype(int)
+#     queued = df[df["event_type"] == "Q"].groupby("time_bin").size()
+#     completed = df[df["event_type"] == "C"].groupby("time_bin").size()
+#     queue_depth = (queued - completed).cumsum()
+
+#     if queue_depth.empty:
+#         print(f"Did not print the following due to no data:\n\t{plot_basename}")
+#         return
+
+#     # Plot queue depth over time
+#     plt.figure(figsize=(10, 6))
+#     plt.plot(queue_depth.index, queue_depth.values, label="Queue Depth Over Time")
+#     plt.title("Overall Queue Depth Over Time")
+#     plt.xlabel("Time (s)")
+#     plt.ylabel("Queue Depth")
+#     plt.legend()
+#     plt.grid()
+
+#     png_out_path = os.path.join(output_dir, f"{plot_basename}.png")
+#     plt.savefig(png_out_path, dpi=300)
+#     pdf_out_path = os.path.join(output_dir, f"{plot_basename}.pdf")
+#     plt.savefig(pdf_out_path)
+#     plt.close()
+
+def visualize_queue_depth_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
+    """
+    Generates per-CPU visualizations of queue depth over time.
+
+    Args:
+        df (pd.DataFrame): DataFrame with blkparse events.
+    """
+    grouped = df.groupby("cpu")
+    for cpu, cpu_data in grouped:
+        cpu_data["time_bin"] = (cpu_data["timestamp"] // 1).astype(int)
+        queued = cpu_data[cpu_data["event_type"] == "Q"].groupby("time_bin").size()
+        completed = cpu_data[cpu_data["event_type"] == "C"].groupby("time_bin").size()
+        queue_depth = (queued - completed).cumsum()
+
+        if queue_depth.empty:
+            print(f"Did not print the following due to no data:\n\t{plot_basename}.{cpu}")
+            continue
+
+        # Plot queue depth for this CPU
+        plt.figure(figsize=(10, 6))
+        plt.plot(queue_depth.index, queue_depth.values, label=f"Queue Depth (CPU {cpu})")
+        plt.title(f"Queue Depth Over Time for CPU {cpu}")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Queue Depth")
+        plt.legend()
+        plt.grid()
+
+        png_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}.png")
+        plt.savefig(png_out_path, dpi=300)
+        pdf_out_path = os.path.join(output_dir, f"{plot_basename}.{cpu}.pdf")
+        plt.savefig(pdf_out_path)
+        plt.close()
 
 
 def create_arg_parser() -> argparse.ArgumentParser:
@@ -382,6 +1254,8 @@ def main():
     logger.info(f"Graph algorithm program:\n\t{binary_path}")
     
     run_program_and_blktrace(args.framework, binary_args, args.device_path, args.output_dir)
+
+    # TODO: chmod out dir to have user-level permissions, not root
 
 if __name__ == "__main__":
     main()
