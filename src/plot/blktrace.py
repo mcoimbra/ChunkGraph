@@ -289,6 +289,7 @@ def plot_latency_bar_static_50_bin_uniform(
 
 def plot_latency_logarithmic_bins(
     s: pd.Series,
+    bins,
     plot_basename: str,
     output_dir: str,
     title: str = "placeholder_title"
