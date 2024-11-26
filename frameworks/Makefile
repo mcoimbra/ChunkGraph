@@ -6,6 +6,11 @@ chunk_graph_build:
 	@cd ChunkGraph/apps && export CHUNK=1 && make
 	@echo "[INFO] - Finished building ChunkGraph, returning to original directory."
 
+chunk_graph_build_debug:
+	@echo "[INFO] - Building ChunkGraph..."
+	@cd ChunkGraph/apps && export CHUNK=1 && make debug
+	@echo "[INFO] - Finished building ChunkGraph, returning to original directory."
+
 chunk_graph_clean:
 	@echo "[INFO] - Building ChunkGraph..."
 	@cd ChunkGraph/apps && export CHUNK=1 && make clean

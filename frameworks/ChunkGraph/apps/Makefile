@@ -5,10 +5,6 @@ ifdef CHUNK
 CK = -DCHUNK
 endif
 
-# ifdef DEBUG
-# DEBUG = -DDEBUG_EN
-# endif
-
 ifdef CACHEMISS
 CM = -DCACHEMISS
 endif
