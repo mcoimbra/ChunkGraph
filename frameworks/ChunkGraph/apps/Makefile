@@ -5,6 +5,10 @@ ifdef CHUNK
 CK = -DCHUNK
 endif
 
+# ifdef DEBUG
+# DEBUG = -DDEBUG_EN
+# endif
+
 ifdef CACHEMISS
 CM = -DCACHEMISS
 endif
@@ -63,6 +67,10 @@ COMMON= ligra.h graph.h chunk_buffer.h compressedVertex.h vertex.h utils.h IO.h 
 ALL= encoder decoder BFS BC Components Radii PageRank PageRankDelta KCore testNebrs BellmanFord MIS
 
 all: $(ALL)
+
+# Debug target
+debug: PCFLAGS += -DDEBUG_EN
+debug: $(ALL)
 
 % : %.C $(COMMON)
 	$(PCC) $(PCFLAGS) -o $@ $<

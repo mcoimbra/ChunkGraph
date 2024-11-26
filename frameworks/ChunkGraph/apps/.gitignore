@@ -1,2 +1,12 @@
 encoder
 decoder
+BFS
+BC
+BellmanFord
+Components
+KCore
+MIS
+PageRank
+PageRankDelta
+Radii
+testNebrs

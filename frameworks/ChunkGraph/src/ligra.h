@@ -682,12 +682,14 @@ int parallel_main(int argc, char* argv[]) {
       // Compute(G,P);
       // if(G.transposed) G.transpose();
 #ifdef DEBUG_EN
-      std::string command = "bash ../scripts/perf_diskio.sh " + std::to_string(pid);
+      //std::string command = "bash ../scripts/perf_diskio.sh " + std::to_string(pid);
+      std::string command = "bash frameworks/scripts/perf_diskio.sh " + std::to_string(pid);
       int res = std::system(command.c_str());
       if (res == -1) {
         std::cout << "perf_diskio.sh failed" << std::endl;
       }
-      command = "bash ../scripts/perf_iostat.sh " + std::to_string(pid);
+      //command = "bash ../scripts/perf_iostat.sh " + std::to_string(pid);
+      command = "bash frameworks/scripts/perf_iostat.sh " + std::to_string(pid);
       res = std::system(command.c_str());
       if (res == -1) {
         std::cout << "perf_iostat.sh failed" << std::endl;

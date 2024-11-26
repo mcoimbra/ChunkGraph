@@ -112,17 +112,17 @@ class ProgramHandle:
 
         if timeout == 0:
             exit_code: int = self.proc.wait()
-            logger.info(f"Program with PID {self.proc.pid} exited with code {exit_code}")
+            logger.info(f"Program '{self.program}' with PID {self.proc.pid} exited with code {exit_code}")
             self.close()
             return exit_code
         elif timeout > 0:
             try:
                 exit_code: int = self.proc.wait(timeout=3)  # Wait up to 10 seconds for graceful termination
-                logger.info(f"Program with PID {self.proc.pid} exited with code {exit_code}")
+                logger.info(f"Program '{self.program}' with PID {self.proc.pid} exited with code {exit_code}")
                 self.close()
                 return exit_code
             except subprocess.TimeoutExpired:
-                logger.warning(f"'{self.program}' did not terminate gracefully. Forcing termination...")
+                logger.warning(f"'{self.program}' with PID {self.proc.pid} did not terminate gracefully. Forcing termination...")
                 self.proc.kill()  # Force terminate the process
                 exit_code: int = self.proc.wait()
                 self.close()
@@ -153,12 +153,23 @@ def launch_program(program: str, binary_args: List[str], device_path: str, outpu
     program_stderr: IO = open(program_stderr_path, 'w')
     try:
         logger.info(f"Starting {program} on device '{device_path}'...\n\t{' '.join(binary_args)}")
-        program_proc: subprocess.Popen = subprocess.Popen(
-            binary_args,
-            stdout=program_stdout,
-            stderr=program_stderr,
-            text=True
-        )
+
+        if program == "ChunkGraph":
+            cwd: str = os.path.join(FRAMEWORKS_DIR, program)
+            program_proc: subprocess.Popen = subprocess.Popen(
+                binary_args,
+                #cwd=cwd,
+                stdout=program_stdout,
+                stderr=program_stderr,
+                text=True
+            )
+        else:
+            program_proc: subprocess.Popen = subprocess.Popen(
+                binary_args,
+                stdout=program_stdout,
+                stderr=program_stderr,
+                text=True
+            )
     except FileNotFoundError:
         logger.error(f"Program not found:\n\t'{binary_args[0]}'. Make sure it is installed and/or the provided binary path exists.")
         for t in targets:
@@ -304,12 +315,27 @@ def create_arg_parser() -> argparse.ArgumentParser:
 
     return parser
 
+# ./frameworks/ChunkGraph/apps/BFS -b -chunk -r 12 -t 20 Dataset/LiveJournal/chunk/livejournal
+
 # python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "$HOME/chunk_graph_blktrace_test" --device-path "/dev/nvme0n1p1" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
 
 # python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-LiveJournal-test" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
 
+# python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-LiveJournal-test" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 48 -t 48 Dataset/LiveJournal/chunk/livejournal"
+
+# python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-dimacs10-uk-2007-05-test" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 48 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05"
+
+# python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-dimacs10-uk-2007-05-test" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05"
+
+# strace -e trace=open,read,write,fsync,close -o strace_output.txt python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-dimacs10-uk-2007-05-test" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05"
+
+# strace -e trace=open,read,write,fsync,close -o strace_output.txt  ./frameworks/ChunkGraph/apps/BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05
+
+# ./frameworks/ChunkGraph/apps/BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05
+
 # python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-LiveJournal-test" --device-path "/dev/sdb2" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
 
+# strace -e trace=open,read,write,fsync,close -o strace_output.txt
 
 def main():
 
