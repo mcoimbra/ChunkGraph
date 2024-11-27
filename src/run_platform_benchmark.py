@@ -327,6 +327,10 @@ def create_arg_parser() -> argparse.ArgumentParser:
 
 # python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-dimacs10-uk-2007-05-test" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05"
 
+# BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05
+# stress
+# strace -e trace=mmap,open,read,write,fsync,close -o strace_output.txt ./frameworks/ChunkGraph/apps/BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05
+
 # strace -e trace=open,read,write,fsync,close -o strace_output.txt python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "Outputs/ChunkGraph-dimacs10-uk-2007-05-test" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05"
 
 # strace -e trace=open,read,write,fsync,close -o strace_output.txt  ./frameworks/ChunkGraph/apps/BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05
