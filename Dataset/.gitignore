@@ -3,3 +3,4 @@
 
 # Except for the themes directories:
 !.gitkeep
+!.gitignore
