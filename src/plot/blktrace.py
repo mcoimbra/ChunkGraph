@@ -81,10 +81,27 @@ def plot_throughput_bar_1s_bin(
     """
     # HISTOGRAM: binning by 1 second.
     min_timestamp = max(df["timestamp"].min(), 0)
+
+    # Subtracting this ensures that all timestamps are relative to the start of the trace.
+    # // (integer division) divides the adjusted timestamp by 1, effectively truncating the 
+    # fractional part of the time value.
+    # This operation bins the timestamp into 1-second intervals. For example:
+    # 0.5 // 1 = 0
+    # 1.7 // 1 = 1
+    # 2.3 // 1 = 2
     df["time_bin_1s"] = ((df["timestamp"] - min_timestamp) // 1).astype(int)
 
+    # Calculate the number of events per 1-second bin, measuring the 
+    # throughput (event density) over time.
+    # Result: throughput_1s is a pandas.Series where:
+    # The index represents the 1-second bins (e.g., 0, 1, 2, ...).
+    # The values represent the number of events that occurred in each bin.
     throughput_1s = df.groupby("time_bin_1s").size()
-    x_values = throughput_1s.index * 1  # Scale bin indices to seconds.
+
+    # Converts the bin indices (time_bin_1s) to actual time values in seconds.
+    # * 1: Scales the indices to seconds (no effect here since the bin size is 
+    # 1 second, but it would be important for other bin sizes like 0.5 or 10 seconds).
+    x_values = throughput_1s.index * 1
 
     if throughput_1s.empty:
         print(f"No data to plot for 1-second binning. Skipping...")
@@ -98,7 +115,7 @@ def plot_throughput_bar_1s_bin(
         title=title,
         xlabel="Time (s)",
         ylabel="Throughput (IOPS)",
-        edgecolor="red",
+        #edgecolor="red",
         label="Throughput (IOPS)",
         figsize=(10, 6),
         alpha=0.7,
@@ -148,7 +165,7 @@ def plot_throughput_bar_dynamic_bin(
     time_range = max_timestamp - min_timestamp
 
     if time_range == 0:
-        print(f"No variation in timestamps (all data at {min_timestamp}s). Skipping dynamic binning...")
+        print(f"No variation in timestamps (all data at {min_timestamp} s). Skipping dynamic binning...")
         return
 
     # Determine dynamic bin size.
@@ -287,8 +304,53 @@ def plot_latency_bar_static_50_bin_uniform(
 #     plt.savefig(pdf_out_path)
 #     plt.close()
 
+def plot_latency_time_series(
+    latencies: pd.DataFrame,
+    plot_basename: str,
+    output_dir: str,
+    title: str = "placeholder_title"
+) -> None:
+    config = plot_functions.PlotConfig(
+        title=title,
+        xlabel="Latency time series (s)",
+        ylabel="Count",
+        edgecolor="black",
+        label="Latency",
+        figsize=(10, 6),
+        do_grid=True,
+        do_legend=True,
+        save_extensions=["png", "pdf"],
+        plot_basename=f"{plot_basename}",
+        output_dir=output_dir,
+        function_type="scatter",
+        xscale="linear"
+    )
+
+    
+
+    # Call apply_plot_config
+    # plot_functions.apply_plot_config(
+    #     x_values=latencies.loc[latencies["latency"] >= 0, "timestamp_c"], 
+    #     y_values=latencies.loc[latencies["latency"] >= 0, "latency"],
+    #     config=config
+    # )
+
+    # Using valid latencies with their corresponding completion timestamps.
+    plt.xscale('linear') 
+    plt.scatter(latencies.loc[latencies["latency"] >= 0, "timestamp_c"], 
+                latencies.loc[latencies["latency"] >= 0, "latency"], 
+                s=1)
+    plt.xlabel("Timestamp (seconds)")
+    plt.ylabel("Latency (seconds)")
+    plt.title(title)
+
+    for ext in config.save_extensions:
+        fig_output_path = os.path.join(output_dir, f"{plot_basename}.{ext}")
+        plt.savefig(fig_output_path, dpi=config.dpi)
+
+
 def plot_latency_logarithmic_bins(
-    s: pd.Series,
+    latencies: pd.Series,
     bins,
     plot_basename: str,
     output_dir: str,
@@ -304,15 +366,12 @@ def plot_latency_logarithmic_bins(
         output_dir (str): Directory to save the plots.
         title (str): Title for the plot.
     """
-    if s.empty:
-        print(f"No data available for latency histogram. Skipping...")
-        return
     
-    bins = np.logspace(np.log10(s.min()), np.log10(s.max()), 50)
+    #bins = np.logspace(np.log10(latencies.min()), np.log10(latencies.max()), 50)
 
     # Define bin range
-    min_value = s.min()
-    max_value = s.max()
+    min_value = latencies.min()
+    max_value = latencies.max()
 
     if min_value <= 0 or pd.isna(min_value) or pd.isna(max_value) or min_value == max_value:
         print(f"Invalid range for latency histogram (min={min_value}, max={max_value}). Skipping...")
@@ -339,7 +398,7 @@ def plot_latency_logarithmic_bins(
         do_grid=True,
         do_legend=True,
         save_extensions=["png", "pdf"],
-        plot_basename=f"{plot_basename}_log",
+        plot_basename=f"{plot_basename}",
         output_dir=output_dir,
         function_type="hist",
         xlim=(min_value, max_value),
@@ -347,12 +406,31 @@ def plot_latency_logarithmic_bins(
     )
 
     # Call apply_plot_config
-    plot_functions.apply_plot_config(
-        x_values=s,#.tolist(),
-        #x_values=s[s > 0].tolist(),  # Exclude non-positive values for log scale
-        y_values=None,  # Not required for histograms
-        config=config
+    # Plot histogram
+    plt.hist(
+        x=latencies,
+        bins=bins,
+        edgecolor=config.edgecolor,
+        alpha=config.alpha,
+        label=config.label,
     )
+    plt.xscale("log")  # Ensure x-axis is logarithmic
+    plt.xlabel("Latency (seconds)")
+    plt.ylabel("Frequency")
+    plt.title("Histogram of Latencies")
+    plt.gca().xaxis.set_major_formatter(ticker.LogFormatter())  # Use readable log formatting
+    plt.legend()
+    for ext in config.save_extensions:
+        fig_output_path = os.path.join(output_dir, f"{plot_basename}.{ext}")
+        plt.savefig(fig_output_path, dpi=config.dpi)
+
+    # config.plot_basename = plot_basename + "_FUNC"
+    # plot_functions.apply_plot_config(
+    #     x_values=latencies,#.tolist(),
+    #     #x_values=s[s > 0].tolist(),  # Exclude non-positive values for log scale
+    #     y_values=None,  # Not required for histograms
+    #     config=config
+    # )
 
     # Set logarithmic scale on the X-axis
     # plt.xscale("log")

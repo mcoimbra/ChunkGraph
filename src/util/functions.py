@@ -1,10 +1,11 @@
 import os
 import grp
 import pathlib
+import pprint
 import pwd
 import subprocess
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -84,8 +85,142 @@ def dir_exists_and_not_empty(dir_path: str) -> bool:
     except PermissionError:
         logger.error(f"Permission denied when accessing:\n\t{dir_path}")
         return False
-    
+
+def blkparse_output_to_tsv(file_path: str, csv_path: str) -> None:
+    """
+    Parses blkparse output into a CSV file.
+
+    Args:
+        file_path (str): Path to the `blkparse` text output file.
+        csv_path (str): Path to the CSV file that will be created with `blktrace` data.
+
+    Returns:
+        pd.DataFrame: Parsed data with columns for timestamp, CPU, operation, etc.
+    """
+
+    headers: List[str] = [
+        "event_seq_num",
+        "pid",
+        "timestamp",
+        "cpu",
+        "event_type",
+        "operation",
+        "lba",
+        "blocks",
+    ]
+
+    with open(file_path, "r") as f, open(csv_path, 'w') as csv_out:
+
+        # Write the column headers first.
+        header_str: str = "\t".join(headers) + "\n"
+        csv_out.write(header_str)
+
+        for line in f:
+            line: str
+            parts: List[str] = line.split()
+
+            # Check that there are at least 7 parts (len(parts) > 6) and 
+            # that the 4th part (timestamp) is a valid number. 
+            # Remove lines that don’t meet these criteria.
+            if len(parts) > 6 and parts[3].replace(".", "").isdigit():
+                try:
+                    # Time of the event.
+                    timestamp: float = float(parts[3])
+
+                    # Event sequence number.
+                    event_seq_num: int = int(parts[2])
+
+                    # CPU core ID where the event occurred.
+                    cpu: int = int(parts[1])
+
+                    # Process PID.
+                    pid: int = int(parts[4])
+
+                    # The type of the event (e.g., 'Q' for queued, 'C' for completed).
+                    event_type: str = parts[5]
+
+                    # The performed operation (e.g., read or write).
+                    operation: str = parts[6]
+                    
+                    # (Logical Block Address): optional integer representing the 
+                    # address of the block being accessed.
+                    # Ensure LBA is a valid integer.
+                    lba: Optional[int] = int(parts[7]) if len(parts) > 7 and parts[7].isdigit() else None
+                    
+                    # Optional integer representing the number of blocks involved in 
+                    # the operation.
+                    # Ensure blocks are valid.
+                    blocks: Optional[int] = int(parts[9][1:]) if len(parts) > 9 and parts[9].startswith("+") else None
+
+                    # Read the parsed data.
+                    line_data: Dict = {
+                        "event_seq_num": event_seq_num,
+                        "pid": pid,
+                        "timestamp": timestamp,
+                        "cpu": cpu,
+                        "event_type": event_type,
+                        "operation": operation,
+                        "lba": lba,
+                        "blocks": blocks,
+                    }
+
+                    #pprint.pprint(line_data)
+                    #sys.exit(0)
+
+                    # Write it to the CSV file.
+                    out_line: str = ""
+                    for h in headers:
+                        out_line += str(line_data[h]) + "\t"
+                    out_line = out_line[:-1] # Remove the last tab character.
+                    out_line += "\n"
+                    #print(f"WRITING LINE:\n\t{out_line}")
+                    csv_out.write(out_line)
+                except ValueError as e:
+                    # If a field cannot be parsed (e.g., a non-numeric lba), the line is 
+                    # skipped, and an error message is printed.
+                    # Log or print the line causing the issue (optional for debugging).
+                    print(f"Skipping line due to error: {line.strip()} - {e}")
+                    continue
+
 def parse_blkparse_output(file_path: str, pids: List[int]) -> pd.DataFrame:
+    if file_path.endswith(".tsv"):
+        logger.info("Reading blktrace TSV data into pandas.")
+        return parse_blkparse_tsv_output(file_path, pids)
+    else:
+        logger.info("Reading blktrace native output data into pandas.")
+        return parse_blkparse_native_output(file_path, pids)
+    
+def parse_blkparse_tsv_output(file_path: str, pids: List[int]) -> pd.DataFrame:
+
+    # Define column names and types (adjust based on your blkparse format).
+    col_types = {
+        "event_seq_num": int,
+        "pid": int,
+        "timestamp": float,
+        "cpu": int,
+        "event_type": str,
+        "operation": str,
+        "lba": "Int64",
+        "blocks": "Int64",
+    }
+
+    def custom_converter(blocks):
+        # Handle blocks starting with '+'
+        return int(blocks[1:]) if blocks.startswith("+") else None
+
+    return pd.read_csv(
+        file_path,
+        sep="\t",
+        header=0,
+        usecols=["event_seq_num", "pid", "timestamp", "cpu", "event_type", "operation", "lba", "blocks"],
+        dtype=col_types,
+        converters={"blocks": custom_converter},
+        engine="c",
+        low_memory=False,
+        na_filter=False,
+    )
+
+def parse_blkparse_native_output(file_path: str, pids: List[int]) -> pd.DataFrame:
     """
     Parses blkparse output into a DataFrame.
 
@@ -110,8 +245,14 @@ def parse_blkparse_output(file_path: str, pids: List[int]) -> pd.DataFrame:
                     # Time of the event.
                     timestamp: float = float(parts[3])
 
+                    # Event sequence number.
+                    event_seq_num: int = int(parts[2])
+
                     # CPU core ID where the event occurred.
                     cpu: int = int(parts[1])
+
+                    # Process PID.
+                    pid: int = int(parts[4])
 
                     # The type of the event (e.g., 'Q' for queued, 'C' for completed).
                     event_type: str = parts[5]
@@ -131,7 +272,10 @@ def parse_blkparse_output(file_path: str, pids: List[int]) -> pd.DataFrame:
 
                     # Append the parsed data
                     data.append({
+                        "event_seq_num": event_seq_num,
+                        "pid": pid,
                         "timestamp": timestamp,
+                        "pid": pid,
                         "cpu": cpu,
                         "event_type": event_type,
                         "operation": operation,

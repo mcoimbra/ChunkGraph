@@ -2,21 +2,74 @@ from dataclasses import dataclass, field
 import os
 from typing import Callable, List, Optional, Tuple
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
 import numpy as np
 
+SMALL_SIZE = 17
+INNER_PLOT_FONT_SIZE = 13
+MEDIUM_SIZE = 20
+BIGGER_SIZE = 21
+
 # Update Matplotlib's global configuration
 plt.rcParams.update({
+    'font.size': SMALL_SIZE,
     'figure.figsize': (10, 6),        # Default figure size
-    'axes.titlesize': 'large',       # Title font size
-    'axes.labelsize': 'medium',      # Axis label font size
-    'xtick.labelsize': 'small',      # X-axis tick label size
-    'ytick.labelsize': 'small',      # Y-axis tick label size
-    'legend.fontsize': 'small',      # Legend font size
+    'figure.titlesize': BIGGER_SIZE,
+    'axes.titlesize': MEDIUM_SIZE,       # Title font size
+    'axes.labelsize': BIGGER_SIZE,      # Axis label font size
+    'xtick.labelsize': MEDIUM_SIZE,      # X-axis tick label size
+    'ytick.labelsize': MEDIUM_SIZE,      # Y-axis tick label size
+    'legend.fontsize': MEDIUM_SIZE,      # Legend font size
+    'legend.loc': "best",
     'axes.grid': True,               # Enable grid by default
     'grid.alpha': 0.7,               # Grid transparency
     'grid.color': 'gray',            # Grid color
 })
+plt.rcParams['lines.markersize'] = 7
+plt.rcParams['lines.linestyle'] = "--"
+plt.rcParams['lines.linewidth'] = 0.65
+plt.rcParams['lines.marker'] = "^"
+plt.rcParams['lines.color'] = "black"
+
+plt.rcParams['figure.figsize'] = (8,6)
+
+PLOT_ALPHA = 0.45
+
+# List of matplotlib markers: https://matplotlib.org/api/markers_api.html
+#colors = ('b', 'g', 'r', 'c', 'm', 'y', 'k')
+
+# Convert the cycler of rcParams to a list of colors strings.
+# https://matplotlib.org/examples/color/color_cycle_demo.html
+# https://matplotlib.org/gallery/color/color_cycler.html
+colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+# Set plot styles for group plots.
+styles = ["o","+","*","x","D", "<"]
+
+# Set linestyles.
+linestyles = ['_', '-', '--', ':']
+markers = []
+# List of matplotlib markers: https://matplotlib.org/api/markers_api.html
+for m in Line2D.markers:
+    try:
+        if len(m) == 1 and m != ' ':
+            markers.append(m)
+    except TypeError:
+        pass
+
+# plt.rcParams.update({
+#     'font.size': SMALL_SIZE,
+#     'figure.figsize': (10, 6),        # Default figure size
+#     'axes.titlesize': 'large',       # Title font size
+#     'axes.labelsize': 'medium',      # Axis label font size
+#     'xtick.labelsize': 'small',      # X-axis tick label size
+#     'ytick.labelsize': 'small',      # Y-axis tick label size
+#     'legend.fontsize': 'small',      # Legend font size
+#     'axes.grid': True,               # Enable grid by default
+#     'grid.alpha': 0.7,               # Grid transparency
+#     'grid.color': 'gray',            # Grid color
+# })
 
 @dataclass
 class PlotConfig:
@@ -74,6 +127,8 @@ def apply_plot_config(
             label=config.label,
             align=config.align
         )
+    elif config.function_type == "scatter":
+        plt.scatter(x_values, y_values)
     elif config.function_type == "hist":
         bins = config.bins
         if isinstance(bins, (list, np.ndarray)):

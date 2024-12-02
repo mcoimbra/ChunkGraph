@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from typing import List
 
 import matplotlib.pyplot as plt
@@ -34,6 +35,15 @@ def create_arg_parser() -> argparse.ArgumentParser:
         "-i", "--input_dir", required=True,
         help="Path to directory with blktrace outputs to plot."
     )
+    parser.add_argument(
+        "--generate_tsv", required=False, action="store_true",
+        help="Generate a TSV file from the `blkparse` output?"
+    )
+
+    parser.add_argument(
+        "--per_cpu_plots", required=False, action="store_true",
+        help="Should per-CPU visualizations be plotted?"
+    )
     
 
     return parser
@@ -49,16 +59,28 @@ def visualize_throughput_overview(df: pd.DataFrame, plot_basename: str, output_d
     """
 
     # HISTOGRAM: using (binning on unique) raw timestamps (original method).
-    title: str = "Overall Throughput Over Time (binning: timestamp)"
-    blktrace_plotting.plot_throughput_bar_ts_bin(df, f"{plot_basename}_IOPS_timestamp_binning", output_dir, title)
+    # title: str = "Overall Throughput Over Time (binning: timestamp)"
+    # start_time: float = time.perf_counter()
+    # blktrace_plotting.plot_throughput_bar_ts_bin(df, f"{plot_basename}_IOPS_timestamp_binning", output_dir, title)
+    # end_time: float = time.perf_counter()
+    # logger.info(f"blktrace_plotting.plot_throughput_bar_ts_bin - {end_time-start_time} seconds")
+
+    
 
     # HISTOGRAM: binning by 1 second.
+    plt.figure()  # Creates a new figure, resetting all plot settings
     title = "Overall Throughput Over Time (binning: 1s)"
+    start_time: float = time.perf_counter()
     blktrace_plotting.plot_throughput_bar_1s_bin(df, f"{plot_basename}_IOPS_1s_binning", output_dir, title)
+    end_time: float = time.perf_counter()
+    logger.info(f"blktrace_plotting.plot_throughput_bar_1s_bin - {end_time-start_time} seconds")
 
     # HISTOGRAM: Dynamic binning logic.
-    title = "Overall Throughput Over Time (Dynamic Binning)"
-    blktrace_plotting.plot_throughput_bar_dynamic_bin(df, f"{plot_basename}_IOPS_dynamic_binning_bar", output_dir, title, default_bin_count=50)
+    # title = "Overall Throughput Over Time (Dynamic Binning)"
+    # start_time: float = time.perf_counter()
+    # blktrace_plotting.plot_throughput_bar_dynamic_bin(df, f"{plot_basename}_IOPS_dynamic_binning_bar", output_dir, title, default_bin_count=50)
+    # end_time: float = time.perf_counter()
+    # logger.info(f"blktrace_plotting.plot_throughput_bar_dynamic_bin - {end_time-start_time} seconds")
 
 def visualize_throughput_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
     """
@@ -78,19 +100,23 @@ def visualize_throughput_per_cpu(df: pd.DataFrame, plot_basename: str, output_di
         os.makedirs(cpu_out_dir, exist_ok=True)
 
         # HISTOGRAM: using (binning on unique) raw timestamps (original method).
-        title: str = "Overall Throughput Over Time (binning: timestamp)"
-        #blktrace_plotting.plot_throughput_bar_ts_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_timestamp_binning", cpu_out_dir, title)
-        blktrace_plotting.plot_throughput_bar_ts_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_timestamp_binning", cpu_out_dir, title)
+        # title: str = "Overall Throughput Over Time (binning: timestamp)"
+        # #blktrace_plotting.plot_throughput_bar_ts_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_timestamp_binning", cpu_out_dir, title)
+        # blktrace_plotting.plot_throughput_bar_ts_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_timestamp_binning", cpu_out_dir, title)
 
         # HISTOGRAM: binning by 1 second.
+        plt.figure()  # Creates a new figure, resetting all plot settings
         title = "Overall Throughput Over Time (binning: 1s)"
         #blktrace_plotting.plot_throughput_bar_1s_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_1s_binning", cpu_out_dir, title)
+        start_time: float = time.perf_counter()
         blktrace_plotting.plot_throughput_bar_1s_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_1s_binning", cpu_out_dir, title)
+        end_time: float = time.perf_counter()
+        logger.info(f"CPU {cpu} - blktrace_plotting.plot_throughput_bar_1s_bin - {end_time-start_time} seconds")
 
         # HISTOGRAM: Dynamic binning logic.
-        title = "Overall Throughput Over Time (binning: 1s)"
-        #blktrace_plotting.plot_throughput_bar_dynamic_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_dynamic_binning_bar", cpu_out_dir, title)
-        blktrace_plotting.plot_throughput_bar_dynamic_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_dynamic_binning_bar", cpu_out_dir, title, default_bin_count=50)
+        # title = "Overall Throughput Over Time (binning: 1s)"
+        # #blktrace_plotting.plot_throughput_bar_dynamic_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_dynamic_binning_bar", cpu_out_dir, title)
+        # blktrace_plotting.plot_throughput_bar_dynamic_bin(cpu_data, f"{plot_basename}.{cpu}_IOPS_dynamic_binning_bar", cpu_out_dir, title, default_bin_count=50)
 
 
 def visualize_latency_overview(df: pd.DataFrame, plot_basename: str, output_dir: str, title: str = "placeholder_title") -> None:
@@ -131,28 +157,77 @@ def visualize_latency_overview(df: pd.DataFrame, plot_basename: str, output_dir:
     # Negative latencies are excluded.
     # Result - a pandas Series containing positive latency values 
     # for each lba and cpu:
-    valid_latencies: pd.Series = merged[merged["latency"] >= 0]["latency"]
+    #valid_latencies: pd.Series = merged[merged["latency"] >= 0]["latency"]
+    valid_latencies: pd.DataFrame = merged[merged["latency"] >= 0]
 
     if valid_latencies.empty:
         print(f"Did not print the following due to no data:\n\t{plot_basename}")
         return
     
-    print(valid_latencies)
-    print(f"Length of valid_latencies: {len(valid_latencies)}")
-    print(f"Data type: {valid_latencies.dtype}")
-    print(f"Min latency: {valid_latencies.min()}, Max latency: {valid_latencies.max()}")  
+    #print(valid_latencies)
+    latencies_only: pd.Series = valid_latencies["latency"]
+    print(f"Length of valid_latencies: {len(latencies_only)}")
+    print(f"Latency data type: {latencies_only.dtype}")
+    print(f"Min latency: {latencies_only.min()}, Max latency: {latencies_only.max()}")  
 
     # Generates 50 bins (default) dynamically from the data.
     # Uniform bins across the full range of latency values.
-    title: str = "Overall Latency Distribution (Static Binning)"
-    blktrace_plotting.plot_latency_bar_static_50_bin_uniform(valid_latencies, f"{plot_basename}_50_static_binning", output_dir, title, default_bin_count=50)
+    # title: str = "Overall Latency Distribution (Static Binning)"
+    # start_time: float = time.perf_counter()
+    # blktrace_plotting.plot_latency_bar_static_50_bin_uniform(valid_latencies, f"{plot_basename}_50_static_binning", output_dir, title, default_bin_count=50)
+    # end_time: float = time.perf_counter()
+    # logger.info(f"blktrace_plotting.plot_latency_bar_static_50_bin_uniform - {end_time-start_time} seconds")
 
-    # Logarithmic Binning.
-    # Logarithmic bins for a more detailed view of large ranges.
-    title = "Overall Latency Distribution (Logarithmic Binning)"
+    ##### Logarithmic bins for a more detailed view of large ranges.
+    plt.figure()  # Creates a new figure, resetting all plot settings.
+    title = "Latency distribution (logarithmic binning)"
+    start_time: float = time.perf_counter()
+    bins = np.logspace(np.log10(latencies_only.min()), np.log10(latencies_only.max()), 50)
+    blktrace_plotting.plot_latency_logarithmic_bins(latencies_only, bins, f"{plot_basename}_log", output_dir, title=f"{title}")
+    end_time: float = time.perf_counter()
+    logger.info(f"blktrace_plotting.plot_latency_logarithmic_bins - {end_time-start_time} seconds")
 
-    bins = np.logspace(np.log10(valid_latencies.min()), np.log10(valid_latencies.max()), 50)
-    blktrace_plotting.plot_latency_logarithmic_bins(valid_latencies, bins, f"{plot_basename}_log", output_dir, title=f"{plot_basename}_log")
+    ##### Time series of latency.
+    plt.figure()  # Creates a new figure, resetting all plot settings.
+    start_time: float = time.perf_counter()
+    title = "Latency time series"
+    blktrace_plotting.plot_latency_time_series(valid_latencies, f"{plot_basename}_time_series", output_dir, title=f"{title}")
+    end_time: float = time.perf_counter()
+    logger.info(f"blktrace_plotting.plot_latency_time_series - {end_time-start_time} seconds")
+
+    ##### Time series of latency in 1-second intervals.
+    plt.figure()
+    valid_latencies["time_bin_1s"] = (valid_latencies["timestamp_c"] // 1).astype(int)
+    aggregated = valid_latencies.groupby("time_bin_1s")["latency"].agg(["mean", "max", "quantile"])
+    aggregated["95th_percentile"] = valid_latencies.groupby("time_bin_1s")["latency"].quantile(0.95)
+
+    # Plot average latency over time.
+    plt.plot(aggregated.index, aggregated["mean"], label="Mean Latency")
+    plt.plot(aggregated.index, aggregated["95th_percentile"], label="95th Percentile Latency", linestyle='--')
+    plt.xlabel("Time (seconds)")
+    plt.ylabel("Latency (seconds)")
+    plt.title("Latency over time (one-sec bins)")
+    plt.legend()
+    for ext in ["png", "pdf"]:
+        fig_output_path = os.path.join(output_dir, f"{plot_basename}_time_1s_bins.{ext}")
+        plt.savefig(fig_output_path, dpi=300)
+
+    ##### Heatmap of Latency vs. Logical Block Address (LBA).
+    valid_latencies: pd.DataFrame = merged[merged["latency"] >= 0].reset_index()
+    plt.figure()
+    # df['latency_ms'] = (df['completion_time'] - df['issue_time']) * 1000
+    lba_bins = np.linspace(valid_latencies['lba'].min(), valid_latencies['lba'].max(), 100)
+    latency_by_lba = valid_latencies.groupby(pd.cut(valid_latencies['lba'], bins=lba_bins))['latency'].mean()
+
+    plt.bar(latency_by_lba.index.astype(str), latency_by_lba.values, width=1)
+    plt.xticks(rotation=90)
+    plt.xlabel("LBA Range")
+    plt.ylabel("Average Latency (ms)")
+    plt.title("Latency vs. Logical Block Address")
+    plt.legend()
+    for ext in ["png", "pdf"]:
+        fig_output_path = os.path.join(output_dir, f"{plot_basename}_heatmap_vs_LBA.{ext}")
+        plt.savefig(fig_output_path, dpi=300)
 
 def visualize_latency_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
     """
@@ -183,7 +258,11 @@ def visualize_latency_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: 
 
         # Static Binning (Uniform).
         # Uniform bins across the full range of latency values.
+        plt.figure()  # Creates a new figure, resetting all plot settings
+        start_time: float = time.perf_counter()
         blktrace_plotting.plot_latency_bar_static_50_bin_uniform(valid_latencies, f"{plot_basename}_50_static_binning", output_dir, f"{plot_basename}.{cpu}_50_static_binning")
+        end_time: float = time.perf_counter()
+        logger.info(f"CPU {cpu} - blktrace_plotting.plot_latency_bar_static_50_bin_uniform - {end_time-start_time} seconds")
 
         # Dynamic Binning (Range).
         # Uniform bins, but limited to the range of the latency values (minimum to maximum).
@@ -191,8 +270,12 @@ def visualize_latency_per_cpu(df: pd.DataFrame, plot_basename: str, output_dir: 
 
         # Logarithmic Binning.
         # Logarithmic bins for a more detailed view of large ranges.
+        plt.figure()  # Creates a new figure, resetting all plot settings
+        start_time: float = time.perf_counter()
         bins = np.logspace(np.log10(valid_latencies.min()), np.log10(valid_latencies.max()), 50)
         blktrace_plotting.plot_latency_logarithmic_bins(valid_latencies, bins, plot_basename, output_dir, title = f"{plot_basename}.{cpu}_log")
+        end_time: float = time.perf_counter()
+        logger.info(f"CPU {cpu} - blktrace_plotting.plot_latency_logarithmic_bins - {end_time-start_time} seconds")
 
 def visualize_queue_depth_overview(df: pd.DataFrame, plot_basename: str, output_dir: str) -> None:
     """
@@ -395,24 +478,52 @@ def main():
     # Read the execution context.
     pids: List[int] = []
 
+    # Generate a CSV file from the output of `blkparse`.
+    target_tsv_path: str = trace_file_path.replace(".txt", ".tsv")
+    if args.generate_tsv or (not (os.path.exists(target_tsv_path) and os.path.isfile(target_tsv_path))):
+        logger.info(f"Generating CSV file:\n\t{target_tsv_path}")
+        start_time: float = time.perf_counter()
+        util_functions.blkparse_output_to_tsv(trace_file_path, target_tsv_path)
+        end_time: float = time.perf_counter()
+        logger.info(f"Finished generating CSV file ({end_time-start_time})")
+
+    # TODO: pass CSV path to parse_blkparse_output. Either adapt the function to check if
+    # it received a .txt or .csv file, or create a new function.
+
     # Read `blktrace` data into a pandas.DataFrame.
-    df: pd.DataFrame = util_functions.parse_blkparse_output(trace_file_path, pids)
+    #df: pd.DataFrame = util_functions.parse_blkparse_output(trace_file_path, pids)
+    start_time: float = time.perf_counter()
+    df: pd.DataFrame = util_functions.parse_blkparse_output(target_tsv_path, pids)
+    end_time: float = time.perf_counter()
+    logger.info(f"Finished reading blktrace data finished ({end_time-start_time}).")
+
+    
+
     # TODO: Filter by `program_handle.pid()`.
-
-
-    #os.makedirs(blktrace_output_root_dir_path, exist_ok=True)
-    #logger.info(f"Created output directory:\n\t{blktrace_output_root_dir_path}")
+    count_row: int = df.shape[0]  # Gives number of rows
+    count_col: int = df.shape[1]  # Gives number of columns
+    logger.info(f"'blktrace' dataframe has {count_row} lines and {count_col} columns.")
 
     blktrace_plots_dir: str = os.path.join(args.input_dir, "plots")
     os.makedirs(blktrace_plots_dir, exist_ok=True)
 
     # Visualize throughput.
-    visualize_throughput_overview(df, f"{plot_basename}-throughput", blktrace_plots_dir)
-    visualize_throughput_per_cpu(df, f"{plot_basename}-throughput", blktrace_plots_dir)
+    # start_time: float = time.perf_counter()
+    # visualize_throughput_overview(df, f"{plot_basename}-throughput", blktrace_plots_dir)
+    # end_time: float = time.perf_counter()
+    # logger.info(f"Throughput plotting total time: {end_time-start_time}")
+
+    if args.per_cpu_plots:
+        visualize_throughput_per_cpu(df, f"{plot_basename}-throughput", blktrace_plots_dir)
 
     # Visualize latencies.
+    start_time: float = time.perf_counter()
     visualize_latency_overview(df, f"{plot_basename}-latency", blktrace_plots_dir)
-    visualize_latency_per_cpu(df, f"{plot_basename}-latency", blktrace_plots_dir)
+    end_time: float = time.perf_counter()
+    logger.info(f"Latency plotting total time: {end_time-start_time}")
+
+    if args.per_cpu_plots:
+        visualize_latency_per_cpu(df, f"{plot_basename}-latency", blktrace_plots_dir)
 
     # Visualize queue depth.
     #visualize_queue_depth_overview(df, f"{plot_basename}-q_depth", blktrace_plots_dir)
