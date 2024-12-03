@@ -1,1 +1,4 @@
+from typing import List
+
 BLKTRACE_OUTPUT_FILE_SUFFIX: str = "blktrace.merged.txt"
+GRAPH_FRAMEWORKS: List[str] = ["Blaze", "ChunkGraph", "CSRGraph"]

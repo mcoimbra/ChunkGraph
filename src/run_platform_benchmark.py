@@ -11,7 +11,7 @@ from typing import Any, Dict, IO, List, Optional
 
 import pandas as pd
 
-from util.consts import BLKTRACE_OUTPUT_FILE_SUFFIX
+from util.consts import BLKTRACE_OUTPUT_FILE_SUFFIX, GRAPH_FRAMEWORKS
 
 # Logging import must come before other local project modules.
 import util.logging as log_conf
@@ -72,13 +72,14 @@ class ProgramHandle:
     """
     Encapsulates a subprocess.Popen object along with its stdout and stderr file descriptors.
     """
-    def __init__(self, program: str, proc: subprocess.Popen, stdout: IO, stdout_path: str, stderr: IO, stderr_path: str):
+    def __init__(self, program: str, proc: subprocess.Popen, cwd: str, stdout: IO, stdout_path: str, stderr: IO, stderr_path: str):
         self.program: str = program
         self.proc: subprocess.Popen = proc
         self.stdout: IO = stdout
         self.stdout_path: str = stdout_path
         self.stderr: IO = stderr
         self.stderr_path: str = stderr_path
+        self.cwd: str = os.getcwd()
 
     def close(self) -> None:
         """
@@ -89,6 +90,9 @@ class ProgramHandle:
         if not self.stderr.closed:
             self.stderr.close()
         logger.info("Program stdout and stderr have been closed.")
+
+    def cwd(self) -> str:
+        return self.cwd
 
     def pid(self) -> int:
         return self.proc.pid
@@ -151,25 +155,38 @@ def launch_program(program: str, binary_args: List[str], device_path: str, outpu
     program_stderr_path: str = os.path.join(log_dir, f"{program}_stderr.log")
     program_stdout: IO = open(program_stdout_path, 'w')
     program_stderr: IO = open(program_stderr_path, 'w')
+    if program in GRAPH_FRAMEWORKS:
+        cwd: str = os.path.join(FRAMEWORKS_DIR, program)
+    else:
+        cwd: str = os.getcwd()
+        
     try:
         logger.info(f"Starting {program} on device '{device_path}'...\n\t{' '.join(binary_args)}")
 
-        if program == "ChunkGraph":
-            cwd: str = os.path.join(FRAMEWORKS_DIR, program)
-            program_proc: subprocess.Popen = subprocess.Popen(
-                binary_args,
-                #cwd=cwd,
-                stdout=program_stdout,
-                stderr=program_stderr,
-                text=True
-            )
-        else:
-            program_proc: subprocess.Popen = subprocess.Popen(
-                binary_args,
-                stdout=program_stdout,
-                stderr=program_stderr,
-                text=True
-            )
+        
+
+        program_proc: subprocess.Popen = subprocess.Popen(
+            binary_args,
+            stdout=program_stdout,
+            stderr=program_stderr,
+            text=True
+        )
+
+        # if program == "ChunkGraph":
+        #     cwd: str = os.path.join(FRAMEWORKS_DIR, program)
+        #     program_proc: subprocess.Popen = subprocess.Popen(
+        #         binary_args,
+        #         stdout=program_stdout,
+        #         stderr=program_stderr,
+        #         text=True
+        #     )
+        # else:
+        #     program_proc: subprocess.Popen = subprocess.Popen(
+        #         binary_args,
+        #         stdout=program_stdout,
+        #         stderr=program_stderr,
+        #         text=True
+        #     )
     except FileNotFoundError:
         logger.error(f"Program not found:\n\t'{binary_args[0]}'. Make sure it is installed and/or the provided binary path exists.")
         for t in targets:
@@ -181,6 +198,7 @@ def launch_program(program: str, binary_args: List[str], device_path: str, outpu
     return ProgramHandle(
         program=program, 
         proc=program_proc, 
+        cwd=cwd,
         stdout=program_stdout, 
         stdout_path=program_stdout_path,
         stderr=program_stderr,
@@ -203,6 +221,8 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     """
     # Start the program.
     logger.info(f"Starting the program:\n\t{' '.join(binary_args)}\n")
+    # Record start time
+    framework_start_time: float = time.time()
     program_handle: ProgramHandle = launch_program(framework, binary_args, device_path, output_dir=output_dir)
 
     # Create `blkparse` root output directory.
@@ -216,10 +236,12 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     # Run `blktrace`.
     blktrace_args: List[str] = ["blktrace", "-d", device_path, f"--output-dir={blktrace_output_trace_dir_path}"]
     logger.info(f"Effective UID for 'blktrace': {os.geteuid()}")
+    blktrace_start_time: float = time.time()
     blktrace_handle: ProgramHandle = launch_program("blktrace", blktrace_args, device_path, output_dir=blktrace_output_trace_dir_path, log_dir=blktrace_output_root_dir_path)
 
     # Wait for the program to finish.
     prog_ret: int = program_handle.wait()
+    framework_end_time: float = time.time()
     os.system("stty sane")
     
     logger.info(f"Program finished with exit code: {prog_ret}")
@@ -229,6 +251,7 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     timeout: int = 3
     blktrace_handle.terminate()
     blktrace_exit_code: int = blktrace_handle.wait(timeout)
+    blktrace_end_time: float = time.time()
 
     if blktrace_exit_code == 0:
         logger.info(f"blktrace finished with exit code: {blktrace_exit_code}")
@@ -248,17 +271,22 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     merge_blktrace_files(device, merge_target_path, blktrace_output_trace_dir_path)
 
     # Save the execution context to a JSON file in the output directory.
+    # TODO: add program time and blktrace's time.
     pids: List[int] = [program_handle.pid()]
     data: Dict = {
         "blktrace_root_dir": blktrace_output_root_dir_path,
         "blktrace_stderr_path": blktrace_handle.stderr_path,
         "blktrace_stdout_path": blktrace_handle.stdout_path,
+        "blktrace_time": f"{(blktrace_end_time - blktrace_start_time):.2f}",
         "blktrace_traces_dir": blktrace_output_trace_dir_path,
         "framework": framework,
         "framework_args": binary_args,
+        "framework_call": " ".join(binary_args),
         "framework_pids": pids,
+        "framework_cwd": program_handle.cwd(),
         "framework_stderr_path": program_handle.stderr_path,
         "framework_stdout_path": program_handle.stdout_path,
+        "framework_time": f"{(framework_end_time - framework_start_time):.2f}"
     }
     context_target_path: str = os.path.join(output_dir, "context.json")
     with open(context_target_path, 'w') as f:
@@ -296,7 +324,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
         "--elevated", action="store_true",
         help="Indicates that the script is running with elevated privileges."
     )
-    framework_choices: List[str] = ["Blaze", "ChunkGraph", "CSRGraph"]
+    framework_choices: List[str] = GRAPH_FRAMEWORKS
     parser.add_argument(
         "-f", "--framework",
         type=str,
