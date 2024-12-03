@@ -481,11 +481,11 @@ def main():
     # Generate a CSV file from the output of `blkparse`.
     target_tsv_path: str = trace_file_path.replace(".txt", ".tsv")
     if args.generate_tsv or (not (os.path.exists(target_tsv_path) and os.path.isfile(target_tsv_path))):
-        logger.info(f"Generating CSV file:\n\t{target_tsv_path}")
+        logger.info(f"Generating TSV file:\n\t{target_tsv_path}")
         start_time: float = time.perf_counter()
         util_functions.blkparse_output_to_tsv(trace_file_path, target_tsv_path)
         end_time: float = time.perf_counter()
-        logger.info(f"Finished generating CSV file ({end_time-start_time})")
+        logger.info(f"Finished generating TSV file ({end_time-start_time})")
 
     # TODO: pass CSV path to parse_blkparse_output. Either adapt the function to check if
     # it received a .txt or .csv file, or create a new function.
@@ -495,7 +495,7 @@ def main():
     start_time: float = time.perf_counter()
     df: pd.DataFrame = util_functions.parse_blkparse_output(target_tsv_path, pids)
     end_time: float = time.perf_counter()
-    logger.info(f"Finished reading blktrace data finished ({end_time-start_time}).")
+    logger.info(f"Finished reading blktrace data ({end_time-start_time}).")
 
     
 

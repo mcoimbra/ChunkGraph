@@ -274,6 +274,7 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     # TODO: add program time and blktrace's time.
     pids: List[int] = [program_handle.pid()]
     data: Dict = {
+        "blktrace_call": " ".join(blktrace_args),
         "blktrace_root_dir": blktrace_output_root_dir_path,
         "blktrace_stderr_path": blktrace_handle.stderr_path,
         "blktrace_stdout_path": blktrace_handle.stdout_path,
@@ -371,6 +372,17 @@ def create_arg_parser() -> argparse.ArgumentParser:
 # strace -e trace=open,read,write,fsync,close -o strace_output.txt
 
 def main():
+
+    # TODO: check if it makes sense to clear cache before launching th subprocess
+    # TODO: add parameter indicating the tools to run (e.g. "blktrace,pidstat" or "pidstat" or "blktrace+pidstat")
+        # If comma-separated, run in sequence: progA + tool1, progB + tool2
+        # See if it is possible to add cache-clearing logic between such calls.
+    # TODO: add pidstat-launching logic:
+        # Equivalent call if it was just in the shell:
+        # call_code
+        # pid=$!
+        # pidstat -t -p $pid 1 > pidstat.1.txt
+    # TODO: the value of 1 above is the sampling interval.
 
     # Parse arguments.
     parser: argparse.ArgumentParser = create_arg_parser()
