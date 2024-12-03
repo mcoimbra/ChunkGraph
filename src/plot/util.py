@@ -6,21 +6,23 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import MultipleLocator
 import numpy as np
 
-SMALL_SIZE = 17
-INNER_PLOT_FONT_SIZE = 13
-MEDIUM_SIZE = 20
-BIGGER_SIZE = 21
+SMALL_SIZE: int = 15
+INNER_PLOT_FONT_SIZE: int = 11
+MEDIUM_SIZE: int = 18
+BIGGER_SIZE: int = 19
+DPI: int = 300
+
 
 # Update Matplotlib's global configuration
 plt.rcParams.update({
     'font.size': SMALL_SIZE,
-    'figure.figsize': (10, 6),        # Default figure size
+    'figure.figsize': (12, 6),        # Default figure size
     'figure.titlesize': BIGGER_SIZE,
     'axes.titlesize': MEDIUM_SIZE,       # Title font size
     'axes.labelsize': BIGGER_SIZE,      # Axis label font size
     'xtick.labelsize': MEDIUM_SIZE,      # X-axis tick label size
     'ytick.labelsize': MEDIUM_SIZE,      # Y-axis tick label size
-    'legend.fontsize': MEDIUM_SIZE,      # Legend font size
+    'legend.fontsize': SMALL_SIZE,      # Legend font size
     'legend.loc': "best",
     'axes.grid': True,               # Enable grid by default
     'grid.alpha': 0.7,               # Grid transparency
@@ -34,7 +36,7 @@ plt.rcParams['lines.color'] = "black"
 
 plt.rcParams['figure.figsize'] = (8,6)
 
-PLOT_ALPHA = 0.45
+PLOT_ALPHA: float = 0.45
 
 # List of matplotlib markers: https://matplotlib.org/api/markers_api.html
 #colors = ('b', 'g', 'r', 'c', 'm', 'y', 'k')
@@ -45,16 +47,16 @@ PLOT_ALPHA = 0.45
 colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 # Set plot styles for group plots.
-styles = ["o","+","*","x","D", "<"]
+STYLES: List[str] = ["o","+","*","x","D", "<"]
 
 # Set linestyles.
-linestyles = ['_', '-', '--', ':']
-markers = []
+LINESTYLES: List[str] = ['_', '-', '--', ':']
+MARKERS: List = []
 # List of matplotlib markers: https://matplotlib.org/api/markers_api.html
 for m in Line2D.markers:
     try:
         if len(m) == 1 and m != ' ':
-            markers.append(m)
+            MARKERS.append(m)
     except TypeError:
         pass
 
@@ -83,7 +85,7 @@ class PlotConfig:
     figsize: Tuple[int, int] = field(default_factory=lambda: plt.rcParams.get('figure.figsize', (10, 6)))
     do_legend: bool = True  # Whether to display legend
     save_extensions: List[str] = field(default_factory=lambda: ['png', 'pdf'])
-    dpi: int = 300
+    dpi: int = DPI
     function_type: Optional[str] = "plot"  # The type of plotting function ("plot", "hist", "bar")
     alpha: float = field(default_factory=lambda: plt.rcParams.get('grid.alpha', 1.0))
     width: Optional[float] = None  # Width parameter for bar plots

@@ -49,6 +49,8 @@ def create_arg_parser() -> argparse.ArgumentParser:
 
 # python3 -m src.plot_pidstat_data -i "Outputs/ChunkGraph_UKdomain-2007/pidstat" -o "Outputs/ChunkGraph_UKdomain-2007/pidstat"
 
+# python3 -m src.plot_pidstat_data --per_cpu_plots -i "Outputs/ChunkGraph_UKdomain-2007/pidstat" -o "Outputs/ChunkGraph_UKdomain-2007/pidstat"
+
 def main():
 
     # Parse arguments.
@@ -90,6 +92,8 @@ def main():
         pidstat_plotting.save_to_tsv(df, target_tsv_path)
         end_time: float = time.perf_counter()
         logger.info(f"Finished generating TSV file ({end_time-start_time})")
+
+    #sys.exit(0)
     
     count_row: int = df.shape[0]  # Gives number of rows
     count_col: int = df.shape[1]  # Gives number of columns
@@ -98,17 +102,11 @@ def main():
     pidstat_plots_dir: str = os.path.join(args.input_dir, "plots")
     os.makedirs(pidstat_plots_dir, exist_ok=True)
 
-    # Visualize throughput.
-    # start_time: float = time.perf_counter()
-    # visualize_throughput_overview(df, f"{plot_basename}-throughput", pidstat_plots_dir)
-    # end_time: float = time.perf_counter()
-    # logger.info(f"Throughput plotting total time: {end_time-start_time}")
-
     plot_basename: str = "pidstat"
     if args.per_cpu_plots:
-        #pidstat_plotting.plot_iostat_by_cpu(df, pidstat_plots_dir, plot_basename, 300)
-        pidstat_plotting.plot_iostat_by_cpu_v2(df, pidstat_plots_dir, plot_basename, 300, 20)
-    pidstat_plotting.plot_cpu_metrics_with_transparent_markers(df, pidstat_plots_dir, plot_basename, 300, 20)
+        pidstat_plotting.scatter_cpu_usage_vs_time(df, pidstat_plots_dir, f"{plot_basename}_CPUs_along_secs")
+
+    pidstat_plotting.plot_cpu_usage_vs_time(df, pidstat_plots_dir, plot_basename, bins=20)
         
 
 if __name__ == "__main__":

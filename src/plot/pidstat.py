@@ -10,6 +10,9 @@ import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 
+# Important to set up matplotlib aesthetics.
+import plot.util as plot_functions
+
 # Load pidstat data from the file.
 def parse_pidstat(file_path: str) -> pd.DataFrame:
     """
@@ -41,7 +44,7 @@ def parse_pidstat(file_path: str) -> pd.DataFrame:
                 #sys.exit(0)
                 headers[0] = "Time_s"
                 headers[1] = "Time"
-                headers = headers[1:]
+                #headers = headers[1:]
                 continue
 
 
@@ -72,7 +75,7 @@ def parse_pidstat(file_path: str) -> pd.DataFrame:
                 # Calculate the total number of seconds since midnight
                 total_seconds: int = time_obj.hour * 3600 + time_obj.minute * 60 + time_obj.second
 
-                parts[0] = 
+                parts[0] = total_seconds
                 #parts = parts[1:]
 
                 # The header was appropriately corrected as well.
@@ -97,6 +100,9 @@ def parse_pidstat(file_path: str) -> pd.DataFrame:
     for col in numeric_columns:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Subtract the smallest value from the "Time_s" column
+    df["Time_s"] = df["Time_s"] - df["Time_s"].min()
     
     return df
 
@@ -111,30 +117,46 @@ def save_to_tsv(dataframe: pd.DataFrame, output_file: str) -> None:
     # Save the DataFrame as a tab-separated values file
     dataframe.to_csv(output_file, sep="\t", index=False, header=True)
 
-def plot_iostat_by_cpu(df: pd.DataFrame, output_dir: str, plot_basename: str, dpi=300) -> None:
+def scatter_cpu_usage_vs_time(df: pd.DataFrame, output_dir: str, plot_basename: str) -> None:
+        
+    # Plot per-CPU %CPU along time (seconds).
+    plt.figure(figsize=(15, 6))
 
-    plt.figure()
-
-    plt.xlabel("Time")
+    plt.xlabel("Time (s)")
     plt.ylabel("%CPU")
-    plt.title("CPU Usage by Core")
-    plt.legend()
+    plt.title("Per-CPU usage (%) along time (s)")
+    
     plt.xticks(rotation=45)
-    plt.tight_layout()
     
     # Plot by CPU ID.
     for cpu_id in df['CPU'].unique():
         cpu_data = df[df['CPU'] == cpu_id]
-        plt.plot(cpu_data['Time'], cpu_data['%CPU'], label=f'CPU {cpu_id}')
-    
+        i: int = int(cpu_id)
+        marker = plot_functions.MARKERS[i % len(plot_functions.MARKERS)]  # Cycle through marker symbols
+        plt.scatter(
+            cpu_data['Time_s'], 
+            cpu_data['%CPU'],
+            label=f'CPU {cpu_id}',
+            alpha=plot_functions.PLOT_ALPHA,
+            marker=marker)
+
+    plt.legend(
+        loc="center left", 
+        bbox_to_anchor=(1.02, 0.5), 
+        fontsize="small"
+    )
+
+    plt.tight_layout(rect=[0, 0, 0.85, 1])  # Leave space for the legend to the right
+
+
     for ext in ["pdf", "png"]:
         fig_output_path = os.path.join(output_dir, f"{plot_basename}.{ext}")
         if ext == "pdf":
             plt.savefig(fig_output_path)
         else:
-            plt.savefig(fig_output_path, dpi=dpi)
+            plt.savefig(fig_output_path, dpi=plot_functions.DPI)
 
-def plot_iostat_by_cpu_v2(df: pd.DataFrame, output_dir: str, plot_basename: str, dpi=300, bins: int = 20) -> None:
+def plot_pidstat_per_cpu_binning(df: pd.DataFrame, output_dir: str, plot_basename: str, dpi=300, bins: int = 20) -> None:
     """
     Plots aggregated CPU usage by core over time, grouping into bins for readability.
     
@@ -269,8 +291,8 @@ def plot_cpu_metrics_with_markers(df: pd.DataFrame, output_dir: str, plot_basena
     plt.close()
 
 
-def plot_cpu_metrics_with_transparent_markers(
-    df: pd.DataFrame, output_dir: str, plot_basename: str, dpi=300, bins: int = 20
+def plot_cpu_usage_vs_time(
+    df: pd.DataFrame, output_dir: str, plot_basename: str, time_key: str = "Time_s", bins: int = 20
 ) -> None:
     """
     Plots the metrics %CPU, %system, %usr, and %wait over time with distinct and transparent markers,
@@ -284,40 +306,55 @@ def plot_cpu_metrics_with_transparent_markers(
         bins (int, optional): Number of bins to aggregate data into. Default is 20.
     """
     # Convert "Time" column to pandas datetime if necessary
-    if not pd.api.types.is_datetime64_any_dtype(df["Time"]):
-        df["Time"] = pd.to_datetime(df["Time"], format="%I:%M:%S %p")
+    if time_key == "Time":
+        if not pd.api.types.is_datetime64_any_dtype(df["Time"]):
+            df["Time"] = pd.to_datetime(df["Time"], format="%I:%M:%S %p")
 
     # Aggregate data into bins
-    bin_edges = np.linspace(df["Time"].min().value, df["Time"].max().value, bins + 1)
-    bin_labels = pd.to_datetime(bin_edges).strftime('%H:%M:%S')
-    df['Time_Binned'] = pd.cut(df["Time"], bins=pd.to_datetime(bin_edges), labels=bin_labels[:-1], right=False)
+    
+    if time_key == "Time":
+        bin_edges = np.linspace(df[time_key].min().value, df[time_key].max().value, bins + 1)
+        bin_labels = pd.to_datetime(bin_edges).strftime('%H:%M:%S')
+        df['Time_Binned'] = pd.cut(df[time_key], bins=pd.to_datetime(bin_edges), labels=bin_labels[:-1], right=False)
+    else:
+        bin_edges = np.linspace(df[time_key].min(), df[time_key].max(), bins + 1)
+        bin_labels = bin_edges # pd.to_datetime(bin_edges).strftime('%H:%M:%S')
+        #df['Time_Binned'] = pd.cut(df[time_key], right=False)
+        df['Time_Binned'] = pd.cut(df[time_key], bins=bin_edges, labels=bin_labels[:-1], right=False)
 
     # Group by bins and calculate the mean for each metric
     metrics = ["%CPU", "%system", "%usr", "%wait"]
     markers = ["o", "s", "D", "^"]  # Circle, square, diamond, triangle
-    grouped = df.groupby("Time_Binned")[metrics].mean().reset_index()
+    grouped = df.groupby("Time_Binned", observed=True)[metrics].mean().reset_index()
 
     # Plot the data
-    plt.figure(figsize=(12, 6))
+    #plt.figure(figsize=(12, 6))
+    plt.figure()
     for metric, marker in zip(metrics, markers):
         plt.plot(
             grouped["Time_Binned"], grouped[metric],
             label=metric,
             marker=marker,
-            alpha=0.7  # Set marker transparency
+            alpha=plot_functions.PLOT_ALPHA  # Set marker transparency
         )
 
     # Improve x-axis readability
     plt.xlabel("Time")
     plt.ylabel("Percentage")
-    plt.title("CPU Metrics Over Time with Transparent Markers")
-    plt.legend()
-    plt.xticks(rotation=45, fontsize=8)
+    plt.title("CPU metrics (%) over time (s)")
+    #plt.legend()
+    plt.legend(
+        loc="center left", 
+        bbox_to_anchor=(1.02, 0.5), 
+        fontsize="small"
+    )
+
+    plt.xticks(rotation=45)
     plt.tight_layout()
 
     # Save the plot in multiple formats
     for ext in ["pdf", "png"]:
         fig_output_path = os.path.join(output_dir, f"{plot_basename}_metrics_with_transparent_markers.{ext}")
-        plt.savefig(fig_output_path, dpi=dpi if ext == "png" else None)
+        plt.savefig(fig_output_path, dpi=plot_functions.DPI if ext == "png" else None)
 
     plt.close()
