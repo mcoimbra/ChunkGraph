@@ -91,7 +91,7 @@ class ProgramHandle:
             self.stderr.close()
         logger.info("Program stdout and stderr have been closed.")
 
-    def cwd(self) -> str:
+    def get_cwd(self) -> str:
         return self.cwd
 
     def pid(self) -> int:
@@ -283,7 +283,7 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
         "framework_args": binary_args,
         "framework_call": " ".join(binary_args),
         "framework_pids": pids,
-        "framework_cwd": program_handle.cwd(),
+        "framework_cwd": program_handle.get_cwd(),
         "framework_stderr_path": program_handle.stderr_path,
         "framework_stdout_path": program_handle.stdout_path,
         "framework_time": f"{(framework_end_time - framework_start_time):.2f}"
