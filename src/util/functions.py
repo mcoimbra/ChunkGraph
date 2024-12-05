@@ -102,10 +102,13 @@ def blkparse_output_to_tsv(file_path: str, csv_path: str) -> None:
         "event_seq_num",
         "pid",
         "timestamp",
+        "dev_mjr",
+        "dev_mnr",
         "cpu",
         "event_type",
         "operation",
         "lba",
+        "lba_end",
         "blocks",
     ]
 
@@ -124,6 +127,12 @@ def blkparse_output_to_tsv(file_path: str, csv_path: str) -> None:
             # Remove lines that don’t meet these criteria.
             if len(parts) > 6 and parts[3].replace(".", "").isdigit():
                 try:
+                    
+                    # Store device indication.
+                    dev_part: List[str] = parts[0].strip().split(",")
+                    dev_mjr: int = int(dev_part[0])
+                    dev_mnr: int = int(dev_part[1])
+
                     # Time of the event.
                     timestamp: float = float(parts[3])
 
@@ -146,22 +155,45 @@ def blkparse_output_to_tsv(file_path: str, csv_path: str) -> None:
                     # address of the block being accessed.
                     # Ensure LBA is a valid integer.
                     lba: Optional[int] = int(parts[7]) if len(parts) > 7 and parts[7].isdigit() else None
-                    
-                    # Optional integer representing the number of blocks involved in 
-                    # the operation.
-                    # Ensure blocks are valid.
-                    blocks: Optional[int] = int(parts[9][1:]) if len(parts) > 9 and parts[9].startswith("+") else None
+
+                    # Check the 'lba' address operator, if any.
+                    # Need it to compute block sizes.
+                    lba_operator: Optional[str] = parts[8] if len(parts) > 8 else None
+
+                    block_count: Optional[int] = None
+                    lba_end: Optional[int] = None
+
+                    if (not lba == None) and (not lba_operator == None):
+                        # Optional integer representing the number of blocks involved in 
+                        # the operation.
+                        # Parse the blocks depending on the event type.
+                        
+                        #if event_type in ["D", "M", "Q"]:
+                        if lba_operator == "+":
+                            block_count = int(parts[9]) if len(parts) > 9 and parts[9].isdigit() else None
+                            if not block_count == None:
+                                lba_end = lba + block_count
+                        #elif event_type == "X":
+                        elif lba_operator == "/":
+                            lba_end = int(parts[9]) if len(parts) >= 9 and parts[9].isdigit() else None
+                            if not lba_end == None:
+                                block_count = lba_end - lba
+
+                        # blocks: Optional[int] = int(parts[9][1:]) if len(parts) > 9 and parts[9].startswith("+") else None
 
                     # Read the parsed data.
                     line_data: Dict = {
                         "event_seq_num": event_seq_num,
                         "pid": pid,
                         "timestamp": timestamp,
+                        "dev_mjr": dev_mjr,
+                        "dev_mnr": dev_mnr,
                         "cpu": cpu,
                         "event_type": event_type,
                         "operation": operation,
                         "lba": lba,
-                        "blocks": blocks,
+                        "lba_end": lba_end,
+                        "blocks": block_count,
                     }
 
                     #pprint.pprint(line_data)
@@ -173,7 +205,7 @@ def blkparse_output_to_tsv(file_path: str, csv_path: str) -> None:
                         out_line += str(line_data[h]) + "\t"
                     out_line = out_line[:-1] # Remove the last tab character.
                     out_line += "\n"
-                    #print(f"WRITING LINE:\n\t{out_line}")
+
                     csv_out.write(out_line)
                 except ValueError as e:
                     # If a field cannot be parsed (e.g., a non-numeric lba), the line is 
@@ -197,24 +229,27 @@ def parse_blkparse_tsv_output(file_path: str, pids: List[int]) -> pd.DataFrame:
         "event_seq_num": int,
         "pid": int,
         "timestamp": float,
+        "dev_mjr": int,
+        "dev_mnr": int,
         "cpu": int,
         "event_type": str,
         "operation": str,
         "lba": "Int64",
+        "lba_end": "Int64",
         "blocks": "Int64",
     }
 
-    def custom_converter(blocks):
-        # Handle blocks starting with '+'
-        return int(blocks[1:]) if blocks.startswith("+") else None
+    # def custom_converter(blocks):
+    #     # Handle blocks starting with '+'
+    #     return int(blocks[1:]) if blocks.startswith("+") else None
 
     return pd.read_csv(
         file_path,
         sep="\t",
         header=0,
-        usecols=["event_seq_num", "pid", "timestamp", "cpu", "event_type", "operation", "lba", "blocks"],
+        usecols=["event_seq_num", "pid", "timestamp", "dev_mjr", "dev_mnr", "cpu", "event_type", "operation", "lba", "lba_end", "blocks"],
         dtype=col_types,
-        converters={"blocks": custom_converter},
+        #converters={"blocks": custom_converter},
         engine="c",
         low_memory=False,
         na_filter=False,
@@ -242,6 +277,11 @@ def parse_blkparse_native_output(file_path: str, pids: List[int]) -> pd.DataFram
             # Remove lines that don’t meet these criteria.
             if len(parts) > 6 and parts[3].replace(".", "").isdigit():
                 try:
+                    # Store device indication.
+                    dev_part: List[str] = parts[0].strip().split(",")
+                    dev_mjr: int = int(dev_part[0])
+                    dev_mnr: int = int(dev_part[1])
+
                     # Time of the event.
                     timestamp: float = float(parts[3])
 
@@ -264,23 +304,43 @@ def parse_blkparse_native_output(file_path: str, pids: List[int]) -> pd.DataFram
                     # address of the block being accessed.
                     # Ensure LBA is a valid integer.
                     lba: Optional[int] = int(parts[7]) if len(parts) > 7 and parts[7].isdigit() else None
-                    
-                    # Optional integer representing the number of blocks involved in 
-                    # the operation.
-                    # Ensure blocks are valid.
-                    blocks: Optional[int] = int(parts[9][1:]) if len(parts) > 9 and parts[9].startswith("+") else None
+
+                    # Check the 'lba' address operator, if any.
+                    # Need it to compute block sizes.
+                    lba_operator: Optional[str] = parts[8] if len(parts) > 8 else None
+
+                    block_count: Optional[int] = None
+                    lba_end: Optional[int] = None
+
+                    if (not lba == None) and (not lba_operator == None):
+                        # Optional integer representing the number of blocks involved in 
+                        # the operation.
+                        # Parse the blocks depending on the event type.
+                        
+                        #if event_type in ["D", "M", "Q"]:
+                        if lba_operator == "+":
+                            block_count = int(parts[9]) if len(parts) > 9 and parts[9].isdigit() else None
+                            if not block_count == None:
+                                lba_end = lba + block_count
+                        #elif event_type == "X":
+                        elif lba_operator == "/":
+                            lba_end = int(parts[9]) if len(parts) >= 9 and parts[9].isdigit() else None
+                            if not lba_end == None:
+                                block_count = lba_end - lba
 
                     # Append the parsed data
                     data.append({
                         "event_seq_num": event_seq_num,
                         "pid": pid,
                         "timestamp": timestamp,
-                        "pid": pid,
+                        "dev_mjr": dev_mjr,
+                        "dev_mnr": dev_mnr,
                         "cpu": cpu,
                         "event_type": event_type,
                         "operation": operation,
                         "lba": lba,
-                        "blocks": blocks,
+                        "lba_end": lba_end,
+                        "blocks": block_count,
                     })
                 except ValueError as e:
                     # If a field cannot be parsed (e.g., a non-numeric lba), the line is 

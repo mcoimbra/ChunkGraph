@@ -486,6 +486,8 @@ def main():
         util_functions.blkparse_output_to_tsv(trace_file_path, target_tsv_path)
         end_time: float = time.perf_counter()
         logger.info(f"Finished generating TSV file ({end_time-start_time})")
+    else:
+        logger.info(f"Skipped TSV file generation.")
 
     # TODO: pass CSV path to parse_blkparse_output. Either adapt the function to check if
     # it received a .txt or .csv file, or create a new function.
@@ -506,6 +508,14 @@ def main():
 
     blktrace_plots_dir: str = os.path.join(args.input_dir, "plots")
     os.makedirs(blktrace_plots_dir, exist_ok=True)
+
+    # Plot histogram.
+    title: str = "Histogram: I/O Block Sizes"
+    start_time: float = time.perf_counter()
+    blktrace_plotting.plot_block_size_histogram(df, f"{plot_basename}_IO_blk_histogram", blktrace_plots_dir, title) 
+    end_time: float = time.perf_counter()
+    logger.info(f"Histogram I/O block size time: {end_time-start_time}")
+    sys.exit(0)
 
     # Visualize throughput.
     # start_time: float = time.perf_counter()

@@ -9,6 +9,136 @@ import pandas as pd
 
 import plot.util as plot_functions
 
+def format_tick_label(x: int):
+    B_SZ: int = 1024
+    K_SZ: int = B_SZ * B_SZ
+    M_SZ: int = K_SZ * B_SZ
+    if x < B_SZ:
+        return f"{int(x)}B"
+    elif x < K_SZ:
+        return f"{int(x / B_SZ)}KB"
+    elif x < M_SZ:
+        return f"{int(x / K_SZ)}MB"
+    else:
+        return f"{int(x / M_SZ)}MB"
+
+# Assuming parse_blkparse_tsv_output is defined as per your provided code.
+# These parameters assume: 
+# - Logical block size of 4096 bytes.
+# - Chunk size of 512 KB * 1024 = 524288 bytes.
+def plot_block_size_histogram(df: pd.DataFrame, plot_basename: str, output_dir: str,
+    title: str = "placeholder_title", logical_block_sz: int = 4096, chunk_sz: int = 512*1024) -> None:
+
+    # Filter valid block sizes.
+    block_sizes = df["blocks"].dropna()  # Remove NaN values
+    block_sizes = block_sizes[block_sizes > 0]  # Keep only positive block sizes
+
+    # Prepare power-of-two bins.
+    min_exp = int(np.floor(np.log2(block_sizes.min())))
+    max_exp = int(np.ceil(np.log2(block_sizes.max())))
+    pow_of_two_bins = 2 ** np.arange(min_exp, max_exp + 1)
+
+    # Plot histogram.
+    plt.figure()
+    plt.hist(
+        block_sizes,
+        bins = pow_of_two_bins,
+        #bins=np.logspace(np.log10(block_sizes.min()), np.log10(block_sizes.max()), 50),  # Log-scaled bins
+        edgecolor="black",
+        alpha=plot_functions.PLOT_ALPHA
+    )
+    #plt.xscale("log")  # Log scale for x-axis
+    plt.xscale("log", base=2)  # Set x-axis to log scale with base 2
+
+    # Set x-axis ticks to powers of 2 and rotate labels
+    x_ticks = pow_of_two_bins
+
+    # This commented line shows 2^value for each tick.
+    x_tick_labels = [f"$2^{{{int(np.log2(x))}}}$" for x in x_ticks]
+
+    plt.xticks(x_ticks, x_tick_labels, rotation=45)
+    plt.xlabel("Number of logical blocks per operation")
+    plt.ylabel("#Occurrences")
+    plt.title(title)
+    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
+    plt.tight_layout()  # Adjust layout to prevent label cutoff
+    
+    #plt.show()
+    for ext in ["pdf", "png"]:
+        fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count_exp_notation.{ext}")
+
+        if not ext == "pdf":
+            plt.savefig(fig_output_path, dpi=plot_functions.DPI)
+        else:
+            plt.savefig(fig_output_path)
+
+    # Print the block size explicitly without exponent notation.
+    x_tick_labels = [f"{x}" for x in x_ticks]
+    plt.xticks(x_ticks, x_tick_labels, rotation=45)
+    plt.xlabel("Number of logical blocks per operation")
+    plt.ylabel("#Occurrences")
+    plt.title(title)
+    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
+    plt.tight_layout()  # Adjust layout to prevent label cutoff
+    
+    #plt.show()
+    for ext in ["pdf", "png"]:
+        fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count.{ext}")
+
+        if not ext == "pdf":
+            plt.savefig(fig_output_path, dpi=plot_functions.DPI)
+        else:
+            plt.savefig(fig_output_path)
+
+
+    # Print with the logical block size multiplied by the `chunk_sz` argument.
+    
+    # Plot histogram.
+    block_sizes = block_sizes * logical_block_sz
+    min_exp = int(np.floor(np.log2(block_sizes.min())))
+    max_exp = int(np.ceil(np.log2(block_sizes.max())))
+    pow_of_two_bins = 2 ** np.arange(min_exp, max_exp + 1)
+    #bin_widths = np.diff(pow_of_two_bins)
+    #weights = np.ones_like(block_sizes) / bin_widths[np.digitize(block_sizes, pow_of_two_bins) - 1]
+    plt.figure()
+    plt.xscale("log", base=2)  # Set x-axis to log scale with base 2
+    plt.hist(
+        block_sizes,
+        bins = pow_of_two_bins,
+        #weights=weights,
+        #bins=np.logspace(np.log10(block_sizes.min()), np.log10(block_sizes.max()), 50),  # Log-scaled bins
+        edgecolor="black",
+        alpha=plot_functions.PLOT_ALPHA
+    )
+
+    # Add a vertical line at chunk size
+    plt.axvline(chunk_sz, color="red", linestyle="--", linewidth=2, label=f"Chunk Size = {format_tick_label(chunk_sz)}")
+
+
+
+    # Set x-axis ticks to powers of 2 and rotate labels
+    x_ticks = pow_of_two_bins
+    # Create formatted tick labels
+    
+    x_tick_labels = [format_tick_label(x) for x in x_ticks]
+    #x_tick_labels = [f"{x}" for x in x_ticks]
+    plt.xticks(x_ticks, x_tick_labels, rotation=45)
+    plt.xlabel(f"Physical (logical block size = {logical_block_sz}B) size sum of the logical blocks per operation")
+    plt.ylabel("#Occurrences")
+    plt.title(title)
+    plt.legend()  # Add a legend for the vertical line
+    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
+    plt.tight_layout()  # Adjust layout to prevent label cutoff
+    
+    #plt.show()
+    for ext in ["pdf", "png"]:
+        fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_sz.{ext}")
+
+        if not ext == "pdf":
+            plt.savefig(fig_output_path, dpi=plot_functions.DPI)
+        else:
+            plt.savefig(fig_output_path)
+
 def plot_throughput_bar_ts_bin(
     df: pd.DataFrame,
     plot_basename: str,
