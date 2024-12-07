@@ -509,12 +509,25 @@ def main():
     blktrace_plots_dir: str = os.path.join(args.input_dir, "plots")
     os.makedirs(blktrace_plots_dir, exist_ok=True)
 
-    # Plot histogram.
+    # Plot histogram of operation size:
+    # - Histogram of the number of logical blocks from operations.
+    # - Histogram of the physical size (number of logical blocks * size of logical block) of operations.
+    # Logical block size obtained with: sudo blockdev -getbsz DEVICE
+    # Physical chunk size obtained with: sudo mdadm --detail DEVICE
     title: str = "Histogram: I/O Block Sizes"
     start_time: float = time.perf_counter()
     blktrace_plotting.plot_block_size_histogram(df, f"{plot_basename}_IO_blk_histogram", blktrace_plots_dir, title) 
     end_time: float = time.perf_counter()
-    logger.info(f"Histogram I/O block size time: {end_time-start_time}")
+    logger.info(f"PLOT: {title} | time: {end_time-start_time}")
+
+    # Plot heat map of accesses per logical block address.
+    # - Heat map with the counts of LBA accesses.
+    # - Heat map with the physical size of LBA accesses.
+    title: str = "Heat map: LBA counts"
+    start_time: float = time.perf_counter()
+    blktrace_plotting.plot_lba_count_heat_map(df, f"{plot_basename}_IO_lba_heat_map", blktrace_plots_dir, title) 
+    end_time: float = time.perf_counter()
+    logger.info(f"PLOT: {title} | time: {end_time-start_time}")
     sys.exit(0)
 
     # Visualize throughput.

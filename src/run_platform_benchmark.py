@@ -11,7 +11,7 @@ from typing import Any, Dict, IO, List, Optional
 
 import pandas as pd
 
-from util.consts import BLKTRACE_OUTPUT_FILE_SUFFIX, GRAPH_FRAMEWORKS
+from util.consts import BLKTRACE_OUTPUT_FILE_SUFFIX, GRAPH_FRAMEWORKS, SUPPORTED_MONITORING_TOOLS
 
 # Logging import must come before other local project modules.
 import util.logging as log_conf
@@ -135,7 +135,7 @@ class ProgramHandle:
             logger.error(f"ProgramHandle.wait() - timeout must be a positive integer")
             sys.exit(1)
 
-def launch_program(program: str, binary_args: List[str], device_path: str, output_dir: str = "", log_dir: str = "",targets: List[ProgramHandle] = []) -> ProgramHandle: #subprocess.Popen:
+def launch_program(program: str, binary_args: List[str], device_path: str, output_dir: str = "", log_dir: str = "",targets: List[ProgramHandle] = []) -> ProgramHandle:
 
     if len(output_dir) == 0:
         output_dir = os.getcwd()
@@ -162,8 +162,6 @@ def launch_program(program: str, binary_args: List[str], device_path: str, outpu
         
     try:
         logger.info(f"Starting {program} on device '{device_path}'...\n\t{' '.join(binary_args)}")
-
-        
 
         program_proc: subprocess.Popen = subprocess.Popen(
             binary_args,
@@ -207,7 +205,7 @@ def launch_program(program: str, binary_args: List[str], device_path: str, outpu
 def launch_monitoring_tool(tool: str, output_dir: str) -> None:
     pass
 
-def run_program_and_blktrace(framework: str, binary_args: List[str], device_path: str, output_dir: str) -> None:
+def run_program_and_tools(framework: str, binary_args: List[str], device_path: str, output_dir: str, tools: List[str], simultaneous_monitoring: bool = False) -> None:
     """
     Runs a program and starts blktrace on a specified device.
 
@@ -219,9 +217,17 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     Returns:
         None
     """
+
+    execution_count: int = 1
+    if simultaneous_monitoring:
+        execution_count: int = 1
+    else:  
+        execution_count = len(tools)
+
     # Start the program.
     logger.info(f"Starting the program:\n\t{' '.join(binary_args)}\n")
-    # Record start time
+
+    # Record start time.
     framework_start_time: float = time.time()
     program_handle: ProgramHandle = launch_program(framework, binary_args, device_path, output_dir=output_dir)
 
@@ -271,7 +277,6 @@ def run_program_and_blktrace(framework: str, binary_args: List[str], device_path
     merge_blktrace_files(device, merge_target_path, blktrace_output_trace_dir_path)
 
     # Save the execution context to a JSON file in the output directory.
-    # TODO: add program time and blktrace's time.
     pids: List[int] = [program_handle.pid()]
     data: Dict = {
         "blktrace_call": " ".join(blktrace_args),
@@ -325,14 +330,38 @@ def create_arg_parser() -> argparse.ArgumentParser:
         "--elevated", action="store_true",
         help="Indicates that the script is running with elevated privileges."
     )
-    framework_choices: List[str] = GRAPH_FRAMEWORKS
+ 
     parser.add_argument(
         "-f", "--framework",
         type=str,
-        choices=framework_choices,  # List of allowed frameworks.
+        choices=GRAPH_FRAMEWORKS,  # List of allowed frameworks.
         required=True,
-        help=f"Mode of operation. Must be one of: {', '.join(framework_choices)}."
+        help=f"Mode of operation. Must be one of: {', '.join(GRAPH_FRAMEWORKS)}."
     )
+
+    def parse_tools(value: str) -> List[str]:
+        """
+        Custom parser to validate and parse a comma-separated list of tools.
+        """
+        tools: List[str] = value.split(",")  # Split the input string by commas
+        invalid_tools: List[str] = [tool for tool in tools if tool not in SUPPORTED_MONITORING_TOOLS]
+        if len(invalid_tools) > 0:
+            raise argparse.ArgumentTypeError(
+                f"Invalid tools: {', '.join(invalid_tools)}. Must be one of: {', '.join(SUPPORTED_MONITORING_TOOLS)}."
+            )
+        return tools
+
+    parser.add_argument(
+        "-t", "--tools",
+        type=parse_tools,
+        required=False,
+        help=f"Monitoring tools to use. Comma-separated list. Must be one or more of: {', '.join(SUPPORTED_MONITORING_TOOLS)}."
+    )
+    parser.add_argument(
+        "--simultaneous_monitoring", action="store_true",
+        help="Indicates that the monitoring tools will run simultaneously."
+    )
+
     parser.add_argument(
         "-o", "--output_dir", required=True,
         help="Directory to store blktrace output."
@@ -345,6 +374,8 @@ def create_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 # ./frameworks/ChunkGraph/apps/BFS -b -chunk -r 12 -t 20 Dataset/LiveJournal/chunk/livejournal
+
+# python3 -m src.run_platform_benchmark --framework "ChunkGraph" --tools "blktrace,pidstat" -o "Outputs/ChunkGraph_UKdomain-2007" --device-path "/dev/nvme0n1" --program "BFS -b -chunk -r 5699262 -t 48 Dataset/UKdomain/chunk/dimacs10-uk-2007-05"
 
 # python3 -m src.run_platform_benchmark --framework "ChunkGraph" -o "$HOME/chunk_graph_blktrace_test" --device-path "/dev/nvme0n1p1" --program "BFS -b -chunk -r 12 -t 48 Dataset/LiveJournal/chunk/livejournal"
 
@@ -373,7 +404,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
 
 def main():
 
-    # TODO: check if it makes sense to clear cache before launching th subprocess
+    
     # TODO: add parameter indicating the tools to run (e.g. "blktrace,pidstat" or "pidstat" or "blktrace+pidstat")
         # If comma-separated, run in sequence: progA + tool1, progB + tool2
         # See if it is possible to add cache-clearing logic between such calls.
@@ -403,17 +434,30 @@ def main():
     logger.info(f"Current PID: {os.getpid()}, Elevated: {args.elevated}")
     util_functions.validate_output_directory(args.output_dir)
 
-    # Run program and blktrace.
+    # Run program and monitoring tools.
     logger.info(f"Current PID: {os.getpid()}, Elevated: {args.elevated}")
     program_args: List[str] = args.program.split()
     binary_path: str = os.path.join(FRAMEWORKS_DIR, args.framework, "apps", program_args[0]) 
     binary_args: List[str] = [binary_path]
     binary_args.extend(program_args[1:])
 
+    # TODO: get physical chunk size and logical block size to store in context JSON.
+    # Logical block size obtained with: ["blockdev", "-getbsz", f"{args.device_path}"]
+    # Physical chunk size obtained with: ["mdadm", "--detail", f"{args.device_path}"]
+
     logger.info(f"Framework: {args.framework}")
     logger.info(f"Graph algorithm program:\n\t{binary_path}")
     
-    run_program_and_blktrace(args.framework, binary_args, args.device_path, args.output_dir)
+    # Set up monitoring tool profiles.
+    if len(args.tools) > 0:
+        logger.info(f"Monitoring tools to use:\n\t{args.tools}")
+        logger.info(f"Monitoring tools will run simultaneously: {args.simultaneous_monitoring}")
+    else:
+        logger.info(f"Not using any monitoring tool.")
+
+    # Run the graph processing framework and the monitoring tools.
+    # TODO: check if it makes sense to clear cache before every time before launching the graph framework 
+    run_program_and_tools(args.framework, binary_args, args.device_path, args.output_dir, args.tools, args.simultaneous_monitoring)
 
     # Change ownership back to the original user.
     util_functions.change_ownership_recursively(args.output_dir, original_user, original_group)

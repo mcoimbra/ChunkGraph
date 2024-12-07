@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
+import seaborn
 
 import plot.util as plot_functions
 
@@ -21,6 +22,125 @@ def format_tick_label(x: int):
         return f"{int(x / K_SZ)}MB"
     else:
         return f"{int(x / M_SZ)}MB"
+
+# def plot_lba_count_heat_map(df: pd.DataFrame, plot_basename: str, output_dir: str,
+#     title: str = "placeholder_title", logical_block_sz: int = 4096, chunk_sz: int = 512*1024) -> None:
+#     """
+#     Plots a heat map of LBAs against block counts.
+
+#     Args:
+#         df (pd.DataFrame): DataFrame containing parsed blktrace data.
+#         plot_basename (str): Base name for the output plot file.
+#         output_dir (str): Directory to save the plot.
+#         title (str, optional): Title for the plot.
+#         logical_block_sz (int, optional): Logical block size in bytes (default: 4096).
+#         chunk_sz (int, optional): RAID chunk size in bytes (default: 512 * 1024).
+#     """
+#     # Filter the DataFrame for valid LBA and block count data.
+#     df = df.dropna(subset=["lba", "blocks"])
+#     df = df[df["blocks"] > 0]
+
+#     # Group by LBA and block count, and calculate the number of occurrences.
+#     heatmap_data = (
+#         df.groupby(["lba", "blocks"])
+#         .size()
+#         .reset_index(name="count")
+#         .pivot(index="lba", columns="blocks", values="count")
+#     )
+
+#     # Plot the heatmap using seaborn.
+#     plt.figure()
+#     seaborn.heatmap(
+#         heatmap_data,
+#         cmap="YlGnBu",
+#         cbar=True,
+#         linewidths=0.5,
+#         linecolor="gray"
+#     )
+
+#     # Add labels and title.
+#     plt.title(title)
+#     plt.xlabel(f"Block Count (logical block size = {logical_block_sz} bytes)")
+#     plt.ylabel("Logical Block Address (LBA)")
+#     plt.tight_layout()
+
+#     # Save the plot.
+#     plot_functions.save_figure(output_dir, f"{plot_basename}_heatmap.png", ["pdf", "png"])
+
+def plot_lba_count_heat_map(
+    df: pd.DataFrame,
+    plot_basename: str,
+    output_dir: str,
+    title: str = "LBA vs Block Count Heatmap",
+    logical_block_sz: int = 4096,
+    chunk_sz: int = 512 * 1024,
+    lba_bins: int = 100,
+    block_bins: int = 50,
+    use_log_binning: bool = True
+) -> None:
+    """
+    Plots a heat map of LBAs against block counts with binning.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing parsed blktrace data.
+        plot_basename (str): Base name for the output plot file.
+        output_dir (str): Directory to save the plot.
+        title (str, optional): Title for the plot.
+        logical_block_sz (int, optional): Logical block size in bytes (default: 4096).
+        chunk_sz (int, optional): RAID chunk size in bytes (default: 512 * 1024).
+        lba_bins (int, optional): Number of bins for LBAs (default: 100).
+        block_bins (int, optional): Number of bins for block counts (default: 50).
+        use_log_binning (bool, optional): Whether to use logarithmic binning (default: True).
+    """
+    # Filter and validate the data
+    df = df.dropna(subset=["lba", "blocks"])
+    df = df[df["blocks"] > 0]
+
+    # Calculate LBA and block count ranges
+    lba_range = (df["lba"].min(), df["lba"].max())
+    block_range = (df["blocks"].min(), df["blocks"].max())
+
+    # Determine bin edges (logarithmic or linear)
+    if use_log_binning:
+        lba_bins_edges = np.logspace(np.log10(lba_range[0] + 1), np.log10(lba_range[1]), lba_bins)
+        block_bins_edges = np.logspace(np.log10(block_range[0] + 1), np.log10(block_range[1]), block_bins)
+    else:
+        lba_bins_edges = np.linspace(*lba_range, lba_bins)
+        block_bins_edges = np.linspace(*block_range, block_bins)
+
+    # Bin the data
+    df["lba_binned"] = pd.cut(df["lba"], bins=lba_bins_edges, labels=False)
+    df["blocks_binned"] = pd.cut(df["blocks"], bins=block_bins_edges, labels=False)
+
+    # Group by binned values and aggregate counts
+    heatmap_data = (
+        df.groupby(["lba_binned", "blocks_binned"])
+        .size()
+        .reset_index(name="count")
+        .pivot(index="lba_binned", columns="blocks_binned", values="count")
+    )
+
+    # Fill missing values with zeros for visualization
+    heatmap_data = heatmap_data.fillna(0)
+
+    # Plot the heat map using seaborn
+    plt.figure(figsize=(12, 8))
+    seaborn.heatmap(
+        heatmap_data,
+        cmap="YlGnBu",
+        cbar=True,
+        linewidths=0.5,
+        linecolor="gray"
+    )
+
+    # Add labels and title
+    plt.title(title)
+    plt.xlabel("Block Count (binned)")
+    plt.ylabel("LBA (binned)")
+    plt.tight_layout()
+
+    # Save the plot
+    plot_functions.save_figure(output_dir, f"{plot_basename}", ["pdf", "png"])
 
 # Assuming parse_blkparse_tsv_output is defined as per your provided code.
 # These parameters assume: 
@@ -63,14 +183,15 @@ def plot_block_size_histogram(df: pd.DataFrame, plot_basename: str, output_dir: 
     plt.grid(True, which="both", linestyle="--", linewidth=0.5)
     plt.tight_layout()  # Adjust layout to prevent label cutoff
     
-    #plt.show()
-    for ext in ["pdf", "png"]:
-        fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count_exp_notation.{ext}")
+    plot_functions.save_figure(output_dir, f"{plot_basename}_logical_blk_count_exp_notation", ["pdf", "png"])
 
-        if not ext == "pdf":
-            plt.savefig(fig_output_path, dpi=plot_functions.DPI)
-        else:
-            plt.savefig(fig_output_path)
+    # for ext in ["pdf", "png"]:
+    #     fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count_exp_notation.{ext}")
+
+    #     if not ext == "pdf":
+    #         plt.savefig(fig_output_path, dpi=plot_functions.DPI)
+    #     else:
+    #         plt.savefig(fig_output_path)
 
     # Print the block size explicitly without exponent notation.
     x_tick_labels = [f"{x}" for x in x_ticks]
@@ -80,15 +201,16 @@ def plot_block_size_histogram(df: pd.DataFrame, plot_basename: str, output_dir: 
     plt.title(title)
     plt.grid(True, which="both", linestyle="--", linewidth=0.5)
     plt.tight_layout()  # Adjust layout to prevent label cutoff
-    
-    #plt.show()
-    for ext in ["pdf", "png"]:
-        fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count.{ext}")
 
-        if not ext == "pdf":
-            plt.savefig(fig_output_path, dpi=plot_functions.DPI)
-        else:
-            plt.savefig(fig_output_path)
+    plot_functions.save_figure(output_dir, f"{plot_basename}_logical_blk_count", ["pdf", "png"])
+    
+    # for ext in ["pdf", "png"]:
+    #     fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count.{ext}")
+
+    #     if not ext == "pdf":
+    #         plt.savefig(fig_output_path, dpi=plot_functions.DPI)
+    #     else:
+    #         plt.savefig(fig_output_path)
 
 
     # Print with the logical block size multiplied by the `chunk_sz` argument.

@@ -1,5 +1,6 @@
-import os
+from abc import ABC, abstractmethod
 import grp
+import os
 import pathlib
 import pprint
 import pwd
@@ -369,3 +370,59 @@ def validate_output_directory(output_dir: str) -> None:
             sys.exit(1)
     else:
         logger.info(f"Validated output directory:\n\t{output_dir}")
+
+class MetricsToolProfile(ABC):
+    """
+    Encapsulates the logic of a monitoring tool such as `blktrace` or `pidstat`.
+    """
+    def __init__(self, tool_name: str, tool_args: List[str]):
+        self.tool_name: str = tool_name
+        self.tool_args: List[str] = tool_args
+        self.is_setup: bool = False
+
+    """
+    Checks if `self.tool_name` is available in the current environment.
+    """
+    def is_tool_available(self) -> bool:
+        pass
+
+    @abstractmethod
+    def setup(self) -> None:
+        self.is_setup = True
+
+class BlktraceToolProfile(MetricsToolProfile):
+    """
+    Encapsulates the logic of `blktrace`.
+    """
+    def __init__(self, device_path: str, output_dir: str):
+        self.tool_name = "blktrace"
+
+        self.output_dir: str = os.path.join(output_dir, self.tool_name)
+        self.blktrace_traces_dir: str = os.path.join(self.output_dir, "traces")
+        
+        tool_args: List[str] = [self.tool_name, "-d", device_path, f"--output-dir={self.blktrace_traces_dir}"]
+
+        super().__init__(self.tool_name, tool_args)
+
+    def setup(self) -> None:
+        os.makedirs(self.blktrace_traces_dir, exist_ok=True)
+        super().setup()
+
+class PidstatToolProfile(MetricsToolProfile):
+    """
+    Encapsulates the logic of `pidstat`.
+    """
+    def __init__(self, framework_pid: int, output_dir: str, sampling_interval: int = 1):
+        self.tool_name = "pidstat"
+
+        self.output_dir: str = os.path.join(output_dir, self.tool_name)
+        
+        # # pidstat -t -p $pid 1 > pidstat.1.txt
+
+        tool_args: List[str] = [self.tool_name, "-t", "-p", f"{framework_pid}", sampling_interval]
+
+        super().__init__(self.tool_name, tool_args)
+
+    def setup(self) -> None:
+        os.makedirs(self.output_dir, exist_ok=True)
+        super().setup()
