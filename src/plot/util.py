@@ -14,7 +14,7 @@ DPI: int = 300
 
 def save_figure(output_dir: str, plot_basename: str, extensions: List[str] = ["png"]) -> None:
     for ext in extensions:
-        fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count_exp_notation.{ext}")
+        fig_output_path = os.path.join(output_dir, f"{plot_basename}.{ext}")
 
         if not ext == "pdf":
             plt.savefig(fig_output_path, dpi=DPI)

@@ -1,12 +1,20 @@
+import logging
 import math
 import os
 import sys
+from typing import List
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 import seaborn
+
+# Logging import must come before other local project modules.
+import util.logging as log_conf
+logger: logging.Logger = log_conf.Logger.get_logger(__name__)
+import util.functions as util_functions
+import plot.blktrace as blktrace_plotting
 
 import plot.util as plot_functions
 
@@ -76,7 +84,10 @@ def plot_lba_count_heat_map(
     chunk_sz: int = 512 * 1024,
     lba_bins: int = 100,
     block_bins: int = 50,
-    use_log_binning: bool = True
+    use_log_binning: bool = True,
+    block_threshold_ratios: List[float] = [0.05],
+    top_lbas: List[int] = [10],
+    circle_scaling_factor: float = 1.0
 ) -> None:
     """
     Plots a heat map of LBAs against block counts with binning.
@@ -92,55 +103,247 @@ def plot_lba_count_heat_map(
         block_bins (int, optional): Number of bins for block counts (default: 50).
         use_log_binning (bool, optional): Whether to use logarithmic binning (default: True).
     """
-    # Filter and validate the data
-    df = df.dropna(subset=["lba", "blocks"])
-    df = df[df["blocks"] > 0]
 
-    # Calculate LBA and block count ranges
-    lba_range = (df["lba"].min(), df["lba"].max())
-    block_range = (df["blocks"].min(), df["blocks"].max())
+    
+    # Filter and validate the data.
+    filtered_df = df.dropna(subset=["lba", "blocks"]).copy()
+    filtered_df = filtered_df[filtered_df["blocks"] > 0]
 
-    # Determine bin edges (logarithmic or linear)
+    # Calculate LBA and block count ranges.
+    lba_range = (filtered_df["lba"].min(), filtered_df["lba"].max())
+    block_range = (filtered_df["blocks"].min(), filtered_df["blocks"].max())
+
+    # Determine bin edges (logarithmic or linear).
     if use_log_binning:
         lba_bins_edges = np.logspace(np.log10(lba_range[0] + 1), np.log10(lba_range[1]), lba_bins)
         block_bins_edges = np.logspace(np.log10(block_range[0] + 1), np.log10(block_range[1]), block_bins)
     else:
         lba_bins_edges = np.linspace(*lba_range, lba_bins)
         block_bins_edges = np.linspace(*block_range, block_bins)
+        
+    # Bin the data.
+    filtered_df["lba_binned"] = pd.cut(filtered_df["lba"], bins=lba_bins_edges, labels=False)
+    filtered_df["blocks_binned"] = pd.cut(filtered_df["blocks"], bins=block_bins_edges, labels=False)
 
-    # Bin the data
-    df["lba_binned"] = pd.cut(df["lba"], bins=lba_bins_edges, labels=False)
-    df["blocks_binned"] = pd.cut(df["blocks"], bins=block_bins_edges, labels=False)
-
-    # Group by binned values and aggregate counts
+    # Group by binned values and aggregate counts.
     heatmap_data = (
-        df.groupby(["lba_binned", "blocks_binned"])
+        filtered_df.groupby(["lba_binned", "blocks_binned"])
         .size()
         .reset_index(name="count")
         .pivot(index="lba_binned", columns="blocks_binned", values="count")
     )
 
-    # Fill missing values with zeros for visualization
+    # Fill missing values with zeros for visualization.
     heatmap_data = heatmap_data.fillna(0)
 
-    # Plot the heat map using seaborn
-    plt.figure(figsize=(12, 8))
-    seaborn.heatmap(
-        heatmap_data,
-        cmap="YlGnBu",
-        cbar=True,
-        linewidths=0.5,
-        linecolor="gray"
+    total_blocks: int = filtered_df["blocks"].sum()
+
+    # Count the number of distinct LBAs.
+    distinct_lbas = filtered_df["lba"].nunique()
+    logger.info(f"Number of distinct LBAs: {distinct_lbas}")
+
+    # PLOTS: heat map of LBAs with at least `block_threshold_ratio` blocks.
+    for block_threshold_ratio in block_threshold_ratios:
+
+        logger.info(f"Heat map: block size threshold: {block_threshold_ratio}")
+
+        # Determine if we need to filter LBAs.
+        include_all_block_sizes: bool = math.isclose(0, block_threshold_ratio)
+
+        # Apply block threshold filtering if needed.
+        if not include_all_block_sizes:
+            
+            # Calculate total block counts to filter LBAs.
+            #total_blocks: int = df["blocks"].sum()
+            lba_threshold: float = total_blocks * block_threshold_ratio
+
+            # Filter LBAs based on the threshold.
+            # lba_counts = df.groupby("lba")["blocks"].sum()
+            # valid_lbas = lba_counts[lba_counts >= lba_threshold].index
+            # df = df[df["lba"].isin(valid_lbas)]
+
+            # Filter bins where the total count across all blocks is below the threshold.
+            valid_lba_bins = heatmap_data.sum(axis=1)[heatmap_data.sum(axis=1) >= lba_threshold].index
+            heatmap_data = heatmap_data.loc[valid_lba_bins]
+
+        if heatmap_data.empty:
+            logger.info(f"No data to plot after applying block threshold filter {block_threshold_ratio*100}% ({int(block_threshold_ratio*total_blocks)}/{total_blocks}).")
+            continue
+        
+        lba_labels = [
+            f"{int(lba_bins_edges[int(i)])}-{int(lba_bins_edges[int(i) + 1])}"
+            for i in heatmap_data.index
+        ]
+
+        # Plot the heat map using seaborn.
+        plt.figure(figsize=(12, 8))
+        seaborn.heatmap(
+            heatmap_data,
+            cmap="YlGnBu",
+            cbar=True,
+            linewidths=0.5,
+            linecolor="gray",
+            yticklabels=lba_labels  # Use full range labels for LBAs
+        )
+
+        # Add labels and title.
+        plt.title(title)
+        plt.xlabel("Block Count (binned)")
+        plt.ylabel("LBA (binned)")
+        plt.tight_layout()
+
+        # Save the plot.
+        plot_functions.save_figure(output_dir, f"{plot_basename}_{block_threshold_ratio*100}pct_blocks", ["pdf", "png"])
+
+    # PLOTS: heat map for the top `top_lba_count` LBAs by block count.
+    for top_lba_count in top_lbas:
+
+        # Filter and validate the data.
+        filtered_df = df.dropna(subset=["lba", "blocks"]).copy()
+        filtered_df = filtered_df[filtered_df["blocks"] > 0]
+
+        # Calculate LBA and block count ranges.
+        lba_range = (filtered_df["lba"].min(), filtered_df["lba"].max())
+        block_range = (filtered_df["blocks"].min(), filtered_df["blocks"].max())
+        
+        # Print the top `top_lba_count`.
+        # Calculate the top 10 LBAs by total block count
+        top_lbas_values = (
+            filtered_df.groupby("lba")["blocks"].sum()
+            .nlargest(top_lba_count)
+            .index
+        )
+        logger.info(f"Top {top_lba_count} LBAs: {list(top_lbas_values)}")
+
+        # Filter DataFrame to include only these LBAs.
+        filtered_df = filtered_df[filtered_df["lba"].isin(top_lbas_values)]
+
+        if filtered_df.empty:
+            logger.info("No data to plot after filtering for top LBAs.")
+            continue
+
+        # Calculate block count range.
+        block_range = (filtered_df["blocks"].min(), filtered_df["blocks"].max())
+
+        # Determine bin edges for block counts (logarithmic or linear).
+        if use_log_binning:
+            block_bins_edges = np.logspace(np.log10(block_range[0] + 1), np.log10(block_range[1]), block_bins)
+        else:
+            block_bins_edges = np.linspace(*block_range, block_bins)
+
+        # Bin the data
+        filtered_df["blocks_binned"] = pd.cut(filtered_df["blocks"], bins=block_bins_edges, labels=False)
+
+        # Group by LBA and binned blocks, then aggregate counts.
+        heatmap_data = (
+            filtered_df.groupby(["lba", "blocks_binned"])
+            .size()
+            .reset_index(name="count")
+            .pivot(index="lba", columns="blocks_binned", values="count")
+        )
+
+        # Fill missing values with zeros for visualization.
+        heatmap_data = heatmap_data.fillna(0)
+
+        # Generate labels for LBAs (show exact LBA values for top LBAs).
+        lba_labels = heatmap_data.index.to_list()
+
+        # Plot the heat map.
+        plt.figure(figsize=(12, 8))
+        seaborn.heatmap(
+            heatmap_data,
+            cmap="YlGnBu",
+            cbar=True,
+            linewidths=0.5,
+            linecolor="gray",
+            yticklabels=lba_labels  # Show top LBA labels directly
+        )
+
+        # Add labels and title.
+        plt.title(title)
+        plt.xlabel("Block Count (binned)")
+        plt.ylabel(f"Logical Block Address (Top {top_lba_count} LBAs)")
+        plt.tight_layout()
+
+        # Save the plot.
+        plot_functions.save_figure(output_dir, f"{plot_basename}_top_{top_lba_count}_lbas_blk_counts", ["pdf", "png"])
+
+
+    # PLOTS: scatter plot for the average LBA block size.
+    # Filter and validate the data.
+    filtered_df = df.dropna(subset=["lba", "blocks"]).copy()
+    filtered_df = filtered_df[filtered_df["blocks"] > 0]
+    lba_stats = (
+        filtered_df.groupby("lba")["blocks"]
+        .agg(["mean", "sum"])
+        .rename(columns={"mean": "avg_block_size", "sum": "total_blocks"})
     )
+    for top_lba_count in top_lbas:
 
-    # Add labels and title
-    plt.title(title)
-    plt.xlabel("Block Count (binned)")
-    plt.ylabel("LBA (binned)")
-    plt.tight_layout()
+        logger.info(f"Scatter plot: top {top_lba_count} LBAs by average block size")
 
-    # Save the plot
-    plot_functions.save_figure(output_dir, f"{plot_basename}", ["pdf", "png"])
+        # Get the top N LBAs by average block size
+        top_lbas_values = lba_stats.nlargest(top_lba_count, "avg_block_size")
+
+        # Generate labels for LBAs (show exact LBA values for top LBAs).
+        lba_labels = top_lbas_values.index.to_list()
+
+        # Calculate average block size and total block count for each LBA
+        # Create the scatter plot
+        plt.figure()
+
+        ax = plt.gca()  # Get the current axis
+        # Explicitly set a white background
+        ax.set_facecolor("white")
+
+        #for lba, row in top_lbas_values.iterrows():
+        for idx, (lba, row) in enumerate(top_lbas_values.iterrows()):
+            avg_block_size = row["avg_block_size"]
+            total_blocks = row["total_blocks"]
+
+            # Plot the scatter point
+            # plt.scatter(
+            #     total_blocks,
+            #     lba,
+            #     color="blue",
+            #     alpha=0.7,
+            #     label=None,
+            #     yticklabels=lba_labels
+            # )
+            plt.scatter(
+                total_blocks,
+                idx,
+                color="blue",
+                alpha=0.7,
+                label=None,
+                zorder=2
+            )
+
+            # Overlay a transparent circle proportional to `avg_block_size``.
+            # plt.gca().add_artist(plt.Circle(
+            #     #(total_blocks, lba),
+            #     (total_blocks, idx),
+            #     avg_block_size * circle_scaling_factor,
+            #     color="blue",
+            #     alpha=0.2,
+            #     zorder=1
+            # ))
+
+        # Customize y-axis to show full LBA addresses.
+        lba_labels = top_lbas_values.index.tolist()  # Full LBA addresses
+        plt.yticks(range(len(lba_labels)), lba_labels)
+
+        # Customize the plot.
+        plt.xlabel("Total Blocks")
+        plt.ylabel("Logical Block Address (LBA)")
+        plt.title(f"{title} (Top {top_lba_count} LBAs)")
+        plt.grid(True, linestyle="--", alpha=plot_functions.PLOT_ALPHA)
+        plt.tight_layout()
+
+        # Save the plot.
+        plot_functions.save_figure(output_dir, f"{plot_basename}_top_{top_lba_count}_avg_block_sz", ["pdf", "png"])
+
+        
 
 # Assuming parse_blkparse_tsv_output is defined as per your provided code.
 # These parameters assume: 

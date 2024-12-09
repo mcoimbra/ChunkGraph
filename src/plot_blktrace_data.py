@@ -523,9 +523,16 @@ def main():
     # Plot heat map of accesses per logical block address.
     # - Heat map with the counts of LBA accesses.
     # - Heat map with the physical size of LBA accesses.
+    
     title: str = "Heat map: LBA counts"
     start_time: float = time.perf_counter()
-    blktrace_plotting.plot_lba_count_heat_map(df, f"{plot_basename}_IO_lba_heat_map", blktrace_plots_dir, title) 
+    
+    blktrace_plotting.plot_lba_count_heat_map(df, 
+            f"{plot_basename}_IO_lba_heat_map", 
+            blktrace_plots_dir, title, 
+            block_threshold_ratios=[0, 0.00005, 0.0005, 0.05],
+            top_lbas=[10, 20]) 
+
     end_time: float = time.perf_counter()
     logger.info(f"PLOT: {title} | time: {end_time-start_time}")
     sys.exit(0)
