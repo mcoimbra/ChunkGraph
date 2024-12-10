@@ -218,6 +218,10 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
         None
     """
 
+    # TODO: get physical chunk size and logical block size to store in context JSON.
+    # Logical block size obtained with: ["blockdev", "-getbsz", f"{args.device_path}"]
+    # Physical chunk size obtained with: ["mdadm", "--detail", f"{args.device_path}"]
+
     execution_count: int = 1
     if simultaneous_monitoring:
         execution_count: int = 1
@@ -441,9 +445,7 @@ def main():
     binary_args: List[str] = [binary_path]
     binary_args.extend(program_args[1:])
 
-    # TODO: get physical chunk size and logical block size to store in context JSON.
-    # Logical block size obtained with: ["blockdev", "-getbsz", f"{args.device_path}"]
-    # Physical chunk size obtained with: ["mdadm", "--detail", f"{args.device_path}"]
+    
 
     logger.info(f"Framework: {args.framework}")
     logger.info(f"Graph algorithm program:\n\t{binary_path}")

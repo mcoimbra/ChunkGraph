@@ -282,19 +282,46 @@ def plot_lba_count_heat_map(
 
         logger.info(f"Scatter plot: top {top_lba_count} LBAs by average block size")
 
-        # Get the top N LBAs by average block size
+        # Get the top N LBAs by average block size.
         top_lbas_values = lba_stats.nlargest(top_lba_count, "avg_block_size")
 
-        # Generate labels for LBAs (show exact LBA values for top LBAs).
-        lba_labels = top_lbas_values.index.to_list()
+        # Determine the range of avg_block_size for scaling.
+        min_block_size = top_lbas_values["avg_block_size"].min()
+        max_block_size = top_lbas_values["avg_block_size"].max()
 
-        # Calculate average block size and total block count for each LBA
-        # Create the scatter plot
+        
+
+        # Generate labels for LBAs (show exact LBA values for top LBAs).
+        lba_labels: List = top_lbas_values.index.to_list()
+
+        # Calculate average block size and total block count for each LBA.
+        # Create the scatter plot.
         plt.figure()
 
-        ax = plt.gca()  # Get the current axis
-        # Explicitly set a white background
+        ax = plt.gca()  # Get the current axis.
+        # Explicitly set a white background.
         ax.set_facecolor("white")
+
+        # Set up circle scaling
+        xlim = (filtered_df["blocks"].min(), filtered_df["blocks"].max())
+        ylim = (0, len(top_lbas_values))  # The y-axis corresponds to the indices (0 to N-1)
+        x_range = xlim[1] - xlim[0]
+        y_range = ylim[1] - ylim[0]
+
+        # Choose a reasonable max radius (in data units, relative to the plot area)
+        #max_radius: float = 0.05 * (plt.gca().get_xlim()[1] - plt.gca().get_xlim()[0])  # 5% of the x-axis range
+        # Normalize avg_block_size to [0, 1] and scale to max_radius.
+        #circle_scaling_factor: float = max_radius / (max_block_size - min_block_size)
+
+        # Scale the radius based on the x and y ranges
+        max_radius = 0.05 * x_range  # 5% of the x-axis range
+        circle_scaling_factor = max_radius / (max_block_size - min_block_size)
+
+
+        # This ensures that the circles retain their shape regardless of axis scaling.
+        # Without this, some circles had a rectangle around them going from the bottom 
+        # edge to the top edge of the figure.
+        #plt.gca().set_aspect("equal", adjustable="datalim")
 
         #for lba, row in top_lbas_values.iterrows():
         for idx, (lba, row) in enumerate(top_lbas_values.iterrows()):
@@ -319,18 +346,37 @@ def plot_lba_count_heat_map(
                 zorder=2
             )
 
+        # Circles should be added after the plot's axes limits are finalized 
+        # (i.e., after all scatter points are added), to ensure their positions 
+        # and sizes align with the data.
+        # This is why we do another loop just to add circls.
+        #for idx, (lba, row) in enumerate(top_lbas_values.iterrows()):
+            # Calculate radius.
+            radius: float = (avg_block_size - min_block_size) * circle_scaling_factor
+
+            # Adjust for the aspect ratio difference.
+            radius = radius / (x_range / y_range)  
+
             # Overlay a transparent circle proportional to `avg_block_size``.
             # plt.gca().add_artist(plt.Circle(
             #     #(total_blocks, lba),
-            #     (total_blocks, idx),
-            #     avg_block_size * circle_scaling_factor,
+            #     xy=(total_blocks, idx),
+            #     radius=avg_block_size * circle_scaling_factor,
             #     color="blue",
             #     alpha=0.2,
             #     zorder=1
             # ))
+            plt.gca().add_artist(plt.Circle(
+                #(total_blocks, lba),
+                xy=(total_blocks, idx),
+                radius=radius,
+                color="blue",
+                alpha=0.2,
+                zorder=1
+            ))
 
         # Customize y-axis to show full LBA addresses.
-        lba_labels = top_lbas_values.index.tolist()  # Full LBA addresses
+        lba_labels: List = top_lbas_values.index.tolist()  # Full LBA addresses
         plt.yticks(range(len(lba_labels)), lba_labels)
 
         # Customize the plot.
@@ -338,12 +384,132 @@ def plot_lba_count_heat_map(
         plt.ylabel("Logical Block Address (LBA)")
         plt.title(f"{title} (Top {top_lba_count} LBAs)")
         plt.grid(True, linestyle="--", alpha=plot_functions.PLOT_ALPHA)
+
+        # Set aspect ratio to ensure circles appear as circles
+        #ax.set_aspect("equal", adjustable="datalim")
+
+        # Adjust layout to prevent label cutoff.
         plt.tight_layout()
+
+        # Adjust aspect ratio for equal scaling
+        # xlim = ax.get_xlim()
+        # ylim = ax.get_ylim()
+        # ax.set_aspect(abs((xlim[1] - xlim[0]) / (ylim[1] - ylim[0])), adjustable="datalim")
+        
+        ax.set_aspect((x_range / y_range), adjustable="datalim")
 
         # Save the plot.
         plot_functions.save_figure(output_dir, f"{plot_basename}_top_{top_lba_count}_avg_block_sz", ["pdf", "png"])
 
-        
+def write_lba_stat_xlsx(df: pd.DataFrame, output_dir: str, logical_block_sz: int = 4096, engine: str = "xlsxwriter", max_rows: int = 1048576) -> None:
+
+    # Filter valid data.
+    filtered_df: pd.DataFrame = df.dropna(subset=["lba", "blocks"]).copy()
+    filtered_df = filtered_df[filtered_df["blocks"] > 0]
+
+    # Calculate LBA statistics.
+    lba_stats: pd.DataFrame = (
+        filtered_df.groupby("lba")["blocks"]
+        .agg(["count", "sum", "mean"])
+        .rename(columns={"count": "block_count", "sum": "block_size_sum", "mean": "avg_block_size"})
+    ).reset_index()
+
+    # Convert block_size_sum and avg_block_size to bytes (if needed).
+    lba_stats["block_size_sum_bytes"] = lba_stats["block_size_sum"] * logical_block_sz
+    lba_stats["avg_block_size_bytes"] = lba_stats["avg_block_size"] * logical_block_sz
+
+    # Create a DataFrame for the specifications sheet.
+    specs_df: pd.DataFrame = pd.DataFrame(
+        {"Parameter": ["Logical Block Size"], "Value": [logical_block_sz]}
+    )
+
+    # Write both sheets to the Excel file.
+    excel_out_path: str = os.path.join(output_dir, "LBA_block_counts.xlsx")
+    # with pd.ExcelWriter(excel_out_path, engine=engine) as writer:
+    #     lba_stats.to_excel(writer, index=False, sheet_name="LBA Stats")
+    #     specs_df.to_excel(writer, index=False, sheet_name="Specifications")
+
+    # Write data to the Excel file
+    with pd.ExcelWriter(excel_out_path, engine=engine) as writer:
+        # Write specifications sheet
+        specs_df.to_excel(writer, index=False, sheet_name="Specifications")
+
+        # Split lba_stats into chunks and write each chunk to a new sheet
+        for i in range(0, len(lba_stats), max_rows):
+            chunk = lba_stats.iloc[i:i + max_rows]
+            sheet_name = f"LBA Stats {i // max_rows + 1}"
+            chunk.to_excel(writer, index=False, sheet_name=sheet_name)
+
+    logger.info(f"Wrote LBA stats to Excel file:\n\t{excel_out_path}")
+
+    stats_csv_path: str = os.path.join(output_dir, "LBA_block_counts-stats.csv")
+    lba_stats.to_csv(stats_csv_path, index=False)
+    logger.info(f"Wrote LBA stats to CSV file:\n\t{stats_csv_path}")
+
+    specs_csv_path: str = os.path.join(output_dir, "LBA_block_counts-specs.csv")
+    specs_df.to_csv(specs_csv_path, index=False)
+    logger.info(f"Wrote LBA I/O specs to CSV file:\n\t{specs_csv_path}")
+
+def plot_top_n_lba_counts_histogram(df: pd.DataFrame, plot_basename: str, output_dir: str,
+    title: str = "placeholder_title", top_n: int = 20) -> None:
+    # Filter valid data
+    filtered_df = df.dropna(subset=["lba"]).copy()
+
+    # Count occurrences of each LBA
+    lba_counts = filtered_df["lba"].value_counts()
+
+    # Select the top_n LBAs
+    top_lbas = lba_counts.head(top_n)
+
+    # Prepare the plot
+    #plt.figure(figsize=(10, 8))
+    plt.figure()
+    y_positions = range(len(top_lbas))  # Y-axis positions for each LBA
+
+    # Plot the horizontal bars
+    plt.barh(y_positions, top_lbas.values, color="blue", alpha=plot_functions.PLOT_ALPHA, edgecolor="black")
+
+    # Add LBA labels to the Y-axis
+    plt.yticks(y_positions, top_lbas.index)
+
+    # Customize the plot
+    plt.xlabel("Number of Occurrences")
+    plt.ylabel("Logical Block Address (LBA)")
+    plt.title(title)
+    plt.grid(axis="x", linestyle="--", alpha=0.5)
+    plt.tight_layout()  # Adjust layout to prevent label cutoff
+
+    plot_functions.save_figure(output_dir, f"{plot_basename}_top_{top_n}", ["pdf", "png"])
+
+    # Sort the LBAs by decreasing count
+    sorted_lbas = top_lbas.sort_values(ascending=True)
+
+    # Prepare the plot
+    plt.figure()
+    y_positions = range(len(sorted_lbas))  # Y-axis positions for each LBA
+
+    # Plot the horizontal bars
+    plt.barh(
+        y_positions,
+        sorted_lbas.values,
+        color="blue",
+        alpha=plot_functions.PLOT_ALPHA,
+        edgecolor="black"
+    )
+
+    # Add LBA labels to the Y-axis
+    plt.yticks(y_positions, sorted_lbas.index)
+
+    # Customize the plot
+    plt.xlabel("Number of Occurrences")
+    plt.ylabel("Logical Block Address (LBA)")
+    plt.title(title)
+    plt.grid(axis="x", linestyle="--", alpha=0.5)
+    plt.tight_layout()  # Adjust layout to prevent label cutoff
+
+    # Save the plot
+    plot_functions.save_figure(output_dir, f"{plot_basename}_top_{top_n}_sorted", ["pdf", "png"])
+
 
 # Assuming parse_blkparse_tsv_output is defined as per your provided code.
 # These parameters assume: 
@@ -388,14 +554,6 @@ def plot_block_size_histogram(df: pd.DataFrame, plot_basename: str, output_dir: 
     
     plot_functions.save_figure(output_dir, f"{plot_basename}_logical_blk_count_exp_notation", ["pdf", "png"])
 
-    # for ext in ["pdf", "png"]:
-    #     fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count_exp_notation.{ext}")
-
-    #     if not ext == "pdf":
-    #         plt.savefig(fig_output_path, dpi=plot_functions.DPI)
-    #     else:
-    #         plt.savefig(fig_output_path)
-
     # Print the block size explicitly without exponent notation.
     x_tick_labels = [f"{x}" for x in x_ticks]
     plt.xticks(x_ticks, x_tick_labels, rotation=45)
@@ -406,15 +564,6 @@ def plot_block_size_histogram(df: pd.DataFrame, plot_basename: str, output_dir: 
     plt.tight_layout()  # Adjust layout to prevent label cutoff
 
     plot_functions.save_figure(output_dir, f"{plot_basename}_logical_blk_count", ["pdf", "png"])
-    
-    # for ext in ["pdf", "png"]:
-    #     fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_count.{ext}")
-
-    #     if not ext == "pdf":
-    #         plt.savefig(fig_output_path, dpi=plot_functions.DPI)
-    #     else:
-    #         plt.savefig(fig_output_path)
-
 
     # Print with the logical block size multiplied by the `chunk_sz` argument.
     
@@ -423,8 +572,7 @@ def plot_block_size_histogram(df: pd.DataFrame, plot_basename: str, output_dir: 
     min_exp = int(np.floor(np.log2(block_sizes.min())))
     max_exp = int(np.ceil(np.log2(block_sizes.max())))
     pow_of_two_bins = 2 ** np.arange(min_exp, max_exp + 1)
-    #bin_widths = np.diff(pow_of_two_bins)
-    #weights = np.ones_like(block_sizes) / bin_widths[np.digitize(block_sizes, pow_of_two_bins) - 1]
+
     plt.figure()
     plt.xscale("log", base=2)  # Set x-axis to log scale with base 2
     plt.hist(
@@ -436,17 +584,15 @@ def plot_block_size_histogram(df: pd.DataFrame, plot_basename: str, output_dir: 
         alpha=plot_functions.PLOT_ALPHA
     )
 
-    # Add a vertical line at chunk size
+    # Add a vertical line at chunk size.
     plt.axvline(chunk_sz, color="red", linestyle="--", linewidth=2, label=f"Chunk Size = {format_tick_label(chunk_sz)}")
 
-
-
-    # Set x-axis ticks to powers of 2 and rotate labels
+    # Set x-axis ticks to powers of 2 and rotate labels.
     x_ticks = pow_of_two_bins
-    # Create formatted tick labels
-    
+
+    # Create formatted tick labels.
     x_tick_labels = [format_tick_label(x) for x in x_ticks]
-    #x_tick_labels = [f"{x}" for x in x_ticks]
+
     plt.xticks(x_ticks, x_tick_labels, rotation=45)
     plt.xlabel(f"Physical (logical block size = {logical_block_sz}B) size sum of the logical blocks per operation")
     plt.ylabel("#Occurrences")
@@ -454,15 +600,8 @@ def plot_block_size_histogram(df: pd.DataFrame, plot_basename: str, output_dir: 
     plt.legend()  # Add a legend for the vertical line
     plt.grid(True, which="both", linestyle="--", linewidth=0.5)
     plt.tight_layout()  # Adjust layout to prevent label cutoff
-    
-    #plt.show()
-    for ext in ["pdf", "png"]:
-        fig_output_path = os.path.join(output_dir, f"{plot_basename}_logical_blk_sz.{ext}")
 
-        if not ext == "pdf":
-            plt.savefig(fig_output_path, dpi=plot_functions.DPI)
-        else:
-            plt.savefig(fig_output_path)
+    plot_functions.save_figure(output_dir, f"{plot_basename}_logical_blk_sz", ["pdf", "png"])
 
 def plot_throughput_bar_ts_bin(
     df: pd.DataFrame,

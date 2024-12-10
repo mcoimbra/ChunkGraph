@@ -509,6 +509,14 @@ def main():
     blktrace_plots_dir: str = os.path.join(args.input_dir, "plots")
     os.makedirs(blktrace_plots_dir, exist_ok=True)
 
+    blktrace_data_dir: str = os.path.join(args.input_dir, "data")
+    os.makedirs(blktrace_data_dir, exist_ok=True)
+
+    # TODO: logical_block_sz, chunk_sz ()should have been written to context.json
+    # during workload execution script (before calling workload):
+    # chunk_sz - sudo mdadm --detail device_path
+    # logical_block_sz - sudo blockdev -getbsz device_path
+
     # Plot histogram of operation size:
     # - Histogram of the number of logical blocks from operations.
     # - Histogram of the physical size (number of logical blocks * size of logical block) of operations.
@@ -518,15 +526,20 @@ def main():
     start_time: float = time.perf_counter()
     blktrace_plotting.plot_block_size_histogram(df, f"{plot_basename}_IO_blk_histogram", blktrace_plots_dir, title) 
     end_time: float = time.perf_counter()
-    logger.info(f"PLOT: {title} | time: {end_time-start_time}")
+    logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
 
-    # Plot heat map of accesses per logical block address.
+    title: str = "Histogram: LBA Counts"
+    start_time: float = time.perf_counter()
+    blktrace_plotting.plot_top_n_lba_counts_histogram(df, f"{plot_basename}_IO_lba_histogram", blktrace_plots_dir,
+    title, top_n = 20)
+    end_time: float = time.perf_counter()
+    logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
+
+    # Plot heat maps and scatter plot of accesses per logical block address.
     # - Heat map with the counts of LBA accesses.
     # - Heat map with the physical size of LBA accesses.
-    
     title: str = "Heat map: LBA counts"
     start_time: float = time.perf_counter()
-    
     blktrace_plotting.plot_lba_count_heat_map(df, 
             f"{plot_basename}_IO_lba_heat_map", 
             blktrace_plots_dir, title, 
@@ -534,7 +547,10 @@ def main():
             top_lbas=[10, 20]) 
 
     end_time: float = time.perf_counter()
-    logger.info(f"PLOT: {title} | time: {end_time-start_time}")
+    logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
+
+    # Write LBA stats to Excel file.
+    blktrace_plotting.write_lba_stat_xlsx(df, blktrace_data_dir, logical_block_sz = 4096)
     sys.exit(0)
 
     # Visualize throughput.
