@@ -275,7 +275,7 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
         mdadm_data["mdadm_time"] = f"{(mdadm_end_time - mdadm_start_time):.2f}"
         data.update(mdadm_data)
     else:
-        logger.info("Skipping 'mdadm' call as {device_path} is assumed to not be RAID.")
+        logger.info(f"Skipping 'mdadm' call as {device_path} is assumed to not be RAID.")
 
     pprint.pprint(data)
 
@@ -559,6 +559,8 @@ def main():
         logger.info(f"Device is RAID:\n\t{args.device_path}")
     else:
         logger.info(f"Assuming non-RAID configuration:\n\t{args.device_path}")
+
+    sys.exit(0)
     
     # Set up monitoring tool profiles.
     if args.tools == None:
