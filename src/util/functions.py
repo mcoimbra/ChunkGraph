@@ -394,9 +394,9 @@ def is_device_raid(device: str) -> bool:
         try:
             result = subprocess.run(["lsmod"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if "md" not in result.stdout:
-                logger.info("The 'md' driver is not loaded. Try loading it with: sudo modprobe md.")
+                logger.info(f"The 'md' driver is not loaded. Try loading it with:\n\tsudo modprobe md.")
             else:
-                print(f"The 'md' driver is loaded, but {mdstat_path} is missing. Check kernel configuration.")
+                logger.info(f"The 'md' driver is loaded, but {mdstat_path} is missing. Check kernel configuration.")
         except Exception as e:
             logger.error(f"Could not check kernel modules:\n\t{e}")
             # logger.error("Exiting.")
@@ -420,12 +420,26 @@ def is_device_raid(device: str) -> bool:
             # sys.exit(1)
         
         return False
+    
+    logger.info(f"Found {mdstat_path}")
 
     # If /proc/mdstat exists, check if the device is listed
     try:
         with open(mdstat_path, "r") as f:
-            mdstat_content: str = f.read()
-        return device in mdstat_content
+            mdstat_content: List[str] = f.readlines()
+            line_ctr: int = 1
+            for l in mdstat_content:
+                stripped: str = l.strip()
+                logger.info(f"Current line {stripped}")
+                if ':' in stripped:
+                    tkns: List[str] = stripped.split(':')
+                    curr_device: str = tkns[0].strip()
+                    if curr_device in device:
+                        logger.info(f"Found {device} in {mdstat_path} output line {line_ctr}:\n\t{stripped}")
+                        return True 
+                line_ctr =+ 1
+        return False
+        #return device in mdstat_content
     except Exception as e:
         logger.error(f"Error reading {mdstat_path}:\n\t{e}")
         return False
@@ -440,7 +454,7 @@ def convert_to_unix_ts(timestamp: str) -> int:
     Returns:
         int: The corresponding Unix timestamp.
     """
-    return int(datetime.strptime(timestamp, "%a %b %d %H:%M:%S %Y").timestamp())
+    return int(datetime.datetime.strptime(timestamp, "%a %b %d %H:%M:%S %Y").timestamp())
 
 def parse_mdadm_output(file_path: str) -> Dict[str, Any]:
     """
@@ -482,8 +496,22 @@ def parse_mdadm_output(file_path: str) -> Dict[str, Any]:
                 mdadm_data['uuid'] = line.split(":", 1)[1].strip()
             elif line.startswith("Name :"):
                 mdadm_data['name'] = line.split(":", 1)[1].strip()
+            elif line.startswith("Layout :"):
+                mdadm_data['layout'] = line.split(":", 1)[1].strip()
             elif line.startswith("Events :"):
                 mdadm_data['events'] = int(line.split(":", 1)[1].strip())
+            elif line.startswith("Chunk Size :"):
+                mdadm_data['chunk_sz_bytes'] = line.split(":", 1)[1].strip()
+                unit: str = mdadm_data['chunk_sz_bytes'][-1].upper()
+                value: int = int(mdadm_data['chunk_sz_bytes'][:-1])
+                if unit == "K":
+                    mdadm_data['chunk_sz_bytes'] = value * 1024
+                elif unit == "M":
+                    mdadm_data['chunk_sz_bytes'] = value * 1024 * 1024
+                elif unit == "G":
+                    mdadm_data['chunk_sz_bytes'] = value * 1024 * 1024 * 1024
+                else:
+                    logger.error(f"Unsupported chunk size from mdadm: {mdadm_data['chunk_sz_bytes']}")
 
             # Match RAID device entries
             elif re.match(r"^\s*\d+\s+\d+\s+\d+\s+\d+\s+\S+", line):

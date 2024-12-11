@@ -245,6 +245,16 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
     with open(blockdev_handle.stdout_path, 'r') as f:
         lines: List[str] = f.readlines()
         blockdev_logical_bsz = int(lines[0].strip())
+    blockdev_data: Dict[str, Any] = {
+        "args": blockdev_args,
+        "call": " ".join(blockdev_args),
+        "root_dir": blockdev_output_root_dir_path,
+        "stderr_path": blockdev_handle.stderr_path,
+        "stdout_path": blockdev_handle.stdout_path,
+        "time": float(f"{(blockdev_end_time - blockdev_start_time):.2f}"),
+        "logical_bsz": blockdev_logical_bsz,
+    }
+    data["blockdev"] = blockdev_data
         
     logger.info(f"blockdev output saved to directory:\n\t{blockdev_output_root_dir_path}")
 
@@ -271,15 +281,18 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
             
         logger.info(f"mdadm output saved to directory:\n\t{mdadm_output_root_dir_path}")
 
-        mdadm_data: Dict[str, Any] = util_functions.parse_mdadm_output(mdadm_output_root_dir_path)
-        mdadm_data["mdadm_time"] = f"{(mdadm_end_time - mdadm_start_time):.2f}"
-        data.update(mdadm_data)
+        mdadm_data: Dict[str, Any] = util_functions.parse_mdadm_output(mdadm_handle.stdout_path)
+        mdadm_data["args"] = mdadm_args
+        mdadm_data["call"] = " ".join(mdadm_args)
+        mdadm_data["time"] = float(f"{(mdadm_end_time - mdadm_start_time):.2f}")
+
+        mdadm_data["root_dir"] = mdadm_output_root_dir_path,
+        mdadm_data["stderr_path"] = mdadm_handle.stderr_path,
+        mdadm_data["stdout_path"] = mdadm_handle.stdout_path,
+        
+        data["mdadm"] = mdadm_data
     else:
         logger.info(f"Skipping 'mdadm' call as {device_path} is assumed to not be RAID.")
-
-    pprint.pprint(data)
-
-    sys.exit(0)
 
     # TODO: check if it makes sense to clear cache before every time before launching the graph framework 
     # This would be in between `execution_count` iterations.
@@ -319,16 +332,16 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
     logger.info(f"Program finished with exit code: {prog_ret}")
     pids: List[int] = [program_handle.pid()]
     framework_data: Dict[str, Any] = {
-        "framework": framework,
-        "framework_args": binary_args,
-        "framework_call": " ".join(binary_args),
-        "framework_pids": pids,
-        "framework_cwd": program_handle.get_cwd(),
-        "framework_stderr_path": program_handle.stderr_path,
-        "framework_stdout_path": program_handle.stdout_path,
-        "framework_time": f"{(framework_end_time - framework_start_time):.2f}"
+        "name": framework,
+        "args": binary_args,
+        "call": " ".join(binary_args),
+        "pids": pids,
+        "cwd": program_handle.get_cwd(),
+        "stderr_path": program_handle.stderr_path,
+        "stdout_path": program_handle.stdout_path,
+        "time": f"{(framework_end_time - framework_start_time):.2f}"
     }
-    data.update(framework_data)
+    data["graph_framework"] = framework_data
 
     # Stop blktrace.
     logger.info("Stopping blktrace...")
@@ -355,48 +368,18 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
     merge_blktrace_files(device, merge_target_path, blktrace_output_trace_dir_path)
 
     blktrace_data: Dict[str, Any] = {
-        "blockdev_call": " ".join(blockdev_args),
-        "blockdev_root_dir": blockdev_output_root_dir_path,
-        "blockdev_stderr_path": blockdev_handle.stderr_path,
-        "blockdev_stdout_path": blockdev_handle.stdout_path,
-        "blockdev_time": f"{(blockdev_end_time - blockdev_start_time):.2f}",
-        "blockdev_logical_bsz": blockdev_logical_bsz,
-        "blktrace_call": " ".join(blktrace_args),
-        "blktrace_root_dir": blktrace_output_root_dir_path,
-        "blktrace_stderr_path": blktrace_handle.stderr_path,
-        "blktrace_stdout_path": blktrace_handle.stdout_path,
-        "blktrace_time": f"{(blktrace_end_time - blktrace_start_time):.2f}",
-        "blktrace_traces_dir": blktrace_output_trace_dir_path
+        "args": blktrace_args,
+        "call": " ".join(blktrace_args),
+        "root_dir": blktrace_output_root_dir_path,
+        "stderr_path": blktrace_handle.stderr_path,
+        "stdout_path": blktrace_handle.stdout_path,
+        "time": f"{(blktrace_end_time - blktrace_start_time):.2f}",
+        "traces_dir": blktrace_output_trace_dir_path
     }
-    data.update(blktrace_data)
+    data["blktrace"] = blktrace_data
 
     # Save the execution context to a JSON file in the output directory.
-    
-    # data: Dict[str, Any] = {
-    #     "blockdev_call": " ".join(blockdev_args),
-    #     "blockdev_root_dir": blockdev_output_root_dir_path,
-    #     "blockdev_stderr_path": blockdev_handle.stderr_path,
-    #     "blockdev_stdout_path": blockdev_handle.stdout_path,
-    #     "blockdev_time": f"{(blockdev_end_time - blockdev_start_time):.2f}",
-    #     "blockdev_logical_bsz": blockdev_logical_bsz,
-    #     "blktrace_call": " ".join(blktrace_args),
-    #     "blktrace_root_dir": blktrace_output_root_dir_path,
-    #     "blktrace_stderr_path": blktrace_handle.stderr_path,
-    #     "blktrace_stdout_path": blktrace_handle.stdout_path,
-    #     "blktrace_time": f"{(blktrace_end_time - blktrace_start_time):.2f}",
-    #     "blktrace_traces_dir": blktrace_output_trace_dir_path,
-    #     "framework": framework,
-    #     "framework_args": binary_args,
-    #     "framework_call": " ".join(binary_args),
-    #     "framework_pids": pids,
-    #     "framework_cwd": program_handle.get_cwd(),
-    #     "framework_stderr_path": program_handle.stderr_path,
-    #     "framework_stdout_path": program_handle.stdout_path,
-    #     "framework_time": f"{(framework_end_time - framework_start_time):.2f}"
-    # }
-
-    # Add data from tools (e.g. `mdadm`) which did not necessarily execute.
-    #data.update(conditional_data)
+    pprint.pprint(data)
 
     context_target_path: str = os.path.join(output_dir, "context.json")
     with open(context_target_path, 'w') as f:
@@ -560,7 +543,7 @@ def main():
     else:
         logger.info(f"Assuming non-RAID configuration:\n\t{args.device_path}")
 
-    sys.exit(0)
+    #sys.exit(0)
     
     # Set up monitoring tool profiles.
     if args.tools == None:
