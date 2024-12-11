@@ -205,7 +205,7 @@ def launch_program(program: str, binary_args: List[str], device_path: str, outpu
 def launch_monitoring_tool(tool: str, output_dir: str) -> None:
     pass
 
-def run_program_and_tools(framework: str, binary_args: List[str], device_path: str, output_dir: str, tools: List[str], simultaneous_monitoring: bool = False) -> None:
+def run_program_and_tools(framework: str, binary_args: List[str], device_path: str, output_dir: str, tools: List[str], simultaneous_monitoring: bool = False, device_is_raid: bool = False) -> None:
     """
     Runs a program and starts blktrace on a specified device.
 
@@ -218,10 +218,72 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
         None
     """
 
-    # TODO: get physical chunk size and logical block size to store in context JSON.
-    # Logical block size obtained with: ["blockdev", "-getbsz", f"{args.device_path}"]
-    # Physical chunk size obtained with: ["mdadm", "--detail", f"{args.device_path}"]
+    # Sub-process data outputs.
+    data: Dict[str, Any] = {}
 
+    # Run `blockdev`.
+    # Create `blockdev` root output directory.
+    blockdev_output_root_dir_path: str = os.path.join(output_dir, "blockdev")
+    os.makedirs(blockdev_output_root_dir_path, exist_ok=True)
+
+    blockdev_args: List[str] = ["blockdev", "--getbsz", device_path]
+    logger.info(f"Effective UID for 'blockdev': {os.geteuid()}")
+    blockdev_start_time: float = time.time()
+    blockdev_handle: ProgramHandle = launch_program("blockdev", blockdev_args, device_path, output_dir=blockdev_output_root_dir_path, log_dir=blockdev_output_root_dir_path)
+    blockdev_exit_code: int = blockdev_handle.wait()
+    blockdev_end_time: float = time.time()
+
+    if blockdev_exit_code == 0:
+        logger.info(f"blockdev finished with exit code: {blockdev_exit_code}")
+    else:
+        logger.error(f"blockdev finished with exit code: {blockdev_exit_code}")
+        logger.error(f"Exiting due to blockdev error.")
+        sys.exit(1)
+
+    # Get the actual logical block size.
+    blockdev_logical_bsz: int = -1
+    with open(blockdev_handle.stdout_path, 'r') as f:
+        lines: List[str] = f.readlines()
+        blockdev_logical_bsz = int(lines[0].strip())
+        
+    logger.info(f"blockdev output saved to directory:\n\t{blockdev_output_root_dir_path}")
+
+    # Check if device is a RAID device.
+    if device_is_raid:
+
+        mdadm_output_root_dir_path: str = os.path.join(output_dir, "mdadm")
+        os.makedirs(mdadm_output_root_dir_path, exist_ok=True)
+
+        mdadm_args: List[str] = ["mdadm", "--detail", device_path]
+        logger.info(f"Effective UID for 'mdadm': {os.geteuid()}")
+
+        mdadm_start_time: float = time.time()
+        mdadm_handle: ProgramHandle = launch_program("mdadm", mdadm_args, device_path, output_dir=mdadm_output_root_dir_path, log_dir=mdadm_output_root_dir_path)
+        mdadm_exit_code: int = mdadm_handle.wait()
+        mdadm_end_time: float = time.time()
+
+        if mdadm_exit_code == 0:
+            logger.info(f"mdadm finished with exit code: {mdadm_exit_code}")
+        else:
+            logger.error(f"mdadm finished with exit code: {mdadm_exit_code}")
+            logger.error(f"Exiting due to mdadm error.")
+            sys.exit(1)
+            
+        logger.info(f"mdadm output saved to directory:\n\t{mdadm_output_root_dir_path}")
+
+        mdadm_data: Dict[str, Any] = util_functions.parse_mdadm_output(mdadm_output_root_dir_path)
+        mdadm_data["mdadm_time"] = f"{(mdadm_end_time - mdadm_start_time):.2f}"
+        data.update(mdadm_data)
+    else:
+        logger.info("Skipping 'mdadm' call as {device_path} is assumed to not be RAID.")
+
+    pprint.pprint(data)
+
+    sys.exit(0)
+
+    # TODO: check if it makes sense to clear cache before every time before launching the graph framework 
+    # This would be in between `execution_count` iterations.
+    # TODO: implement the actual loop of framework executions with 1 monitoring tool each.
     execution_count: int = 1
     if simultaneous_monitoring:
         execution_count: int = 1
@@ -255,6 +317,18 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
     os.system("stty sane")
     
     logger.info(f"Program finished with exit code: {prog_ret}")
+    pids: List[int] = [program_handle.pid()]
+    framework_data: Dict[str, Any] = {
+        "framework": framework,
+        "framework_args": binary_args,
+        "framework_call": " ".join(binary_args),
+        "framework_pids": pids,
+        "framework_cwd": program_handle.get_cwd(),
+        "framework_stderr_path": program_handle.stderr_path,
+        "framework_stdout_path": program_handle.stdout_path,
+        "framework_time": f"{(framework_end_time - framework_start_time):.2f}"
+    }
+    data.update(framework_data)
 
     # Stop blktrace.
     logger.info("Stopping blktrace...")
@@ -280,24 +354,50 @@ def run_program_and_tools(framework: str, binary_args: List[str], device_path: s
     logger.info(f"Starting blkparse to create:\n\t{merge_target_path}")
     merge_blktrace_files(device, merge_target_path, blktrace_output_trace_dir_path)
 
-    # Save the execution context to a JSON file in the output directory.
-    pids: List[int] = [program_handle.pid()]
-    data: Dict = {
+    blktrace_data: Dict[str, Any] = {
+        "blockdev_call": " ".join(blockdev_args),
+        "blockdev_root_dir": blockdev_output_root_dir_path,
+        "blockdev_stderr_path": blockdev_handle.stderr_path,
+        "blockdev_stdout_path": blockdev_handle.stdout_path,
+        "blockdev_time": f"{(blockdev_end_time - blockdev_start_time):.2f}",
+        "blockdev_logical_bsz": blockdev_logical_bsz,
         "blktrace_call": " ".join(blktrace_args),
         "blktrace_root_dir": blktrace_output_root_dir_path,
         "blktrace_stderr_path": blktrace_handle.stderr_path,
         "blktrace_stdout_path": blktrace_handle.stdout_path,
         "blktrace_time": f"{(blktrace_end_time - blktrace_start_time):.2f}",
-        "blktrace_traces_dir": blktrace_output_trace_dir_path,
-        "framework": framework,
-        "framework_args": binary_args,
-        "framework_call": " ".join(binary_args),
-        "framework_pids": pids,
-        "framework_cwd": program_handle.get_cwd(),
-        "framework_stderr_path": program_handle.stderr_path,
-        "framework_stdout_path": program_handle.stdout_path,
-        "framework_time": f"{(framework_end_time - framework_start_time):.2f}"
+        "blktrace_traces_dir": blktrace_output_trace_dir_path
     }
+    data.update(blktrace_data)
+
+    # Save the execution context to a JSON file in the output directory.
+    
+    # data: Dict[str, Any] = {
+    #     "blockdev_call": " ".join(blockdev_args),
+    #     "blockdev_root_dir": blockdev_output_root_dir_path,
+    #     "blockdev_stderr_path": blockdev_handle.stderr_path,
+    #     "blockdev_stdout_path": blockdev_handle.stdout_path,
+    #     "blockdev_time": f"{(blockdev_end_time - blockdev_start_time):.2f}",
+    #     "blockdev_logical_bsz": blockdev_logical_bsz,
+    #     "blktrace_call": " ".join(blktrace_args),
+    #     "blktrace_root_dir": blktrace_output_root_dir_path,
+    #     "blktrace_stderr_path": blktrace_handle.stderr_path,
+    #     "blktrace_stdout_path": blktrace_handle.stdout_path,
+    #     "blktrace_time": f"{(blktrace_end_time - blktrace_start_time):.2f}",
+    #     "blktrace_traces_dir": blktrace_output_trace_dir_path,
+    #     "framework": framework,
+    #     "framework_args": binary_args,
+    #     "framework_call": " ".join(binary_args),
+    #     "framework_pids": pids,
+    #     "framework_cwd": program_handle.get_cwd(),
+    #     "framework_stderr_path": program_handle.stderr_path,
+    #     "framework_stdout_path": program_handle.stdout_path,
+    #     "framework_time": f"{(framework_end_time - framework_start_time):.2f}"
+    # }
+
+    # Add data from tools (e.g. `mdadm`) which did not necessarily execute.
+    #data.update(conditional_data)
+
     context_target_path: str = os.path.join(output_dir, "context.json")
     with open(context_target_path, 'w') as f:
         json.dump(data, f, indent=4)
@@ -419,6 +519,11 @@ def main():
         # pidstat -t -p $pid 1 > pidstat.1.txt
     # TODO: the value of 1 above is the sampling interval.
 
+    # Check if we are running on Linux and exit if not.
+    if not sys.platform in ["linux", "linux2"]:
+        logger.error('Only Linux is supported at the moment. Exiting.')
+        sys.exit(1)
+
     # Parse arguments.
     parser: argparse.ArgumentParser = create_arg_parser()
     args: argparse.Namespace = parser.parse_args()
@@ -445,12 +550,19 @@ def main():
     binary_args: List[str] = [binary_path]
     binary_args.extend(program_args[1:])
 
-    
-
     logger.info(f"Framework: {args.framework}")
     logger.info(f"Graph algorithm program:\n\t{binary_path}")
+
+    # Check if the specified device is RAID.
+    device_is_raid: bool = util_functions.is_device_raid(args.device_path)
+    if device_is_raid:
+        logger.info(f"Device is RAID:\n\t{args.device_path}")
+    else:
+        logger.info(f"Assuming non-RAID configuration:\n\t{args.device_path}")
     
     # Set up monitoring tool profiles.
+    if args.tools == None:
+        args.tools = SUPPORTED_MONITORING_TOOLS
     if len(args.tools) > 0:
         logger.info(f"Monitoring tools to use:\n\t{args.tools}")
         logger.info(f"Monitoring tools will run simultaneously: {args.simultaneous_monitoring}")
@@ -458,8 +570,7 @@ def main():
         logger.info(f"Not using any monitoring tool.")
 
     # Run the graph processing framework and the monitoring tools.
-    # TODO: check if it makes sense to clear cache before every time before launching the graph framework 
-    run_program_and_tools(args.framework, binary_args, args.device_path, args.output_dir, args.tools, args.simultaneous_monitoring)
+    run_program_and_tools(args.framework, binary_args, args.device_path, args.output_dir, args.tools, args.simultaneous_monitoring, device_is_raid=device_is_raid)
 
     # Change ownership back to the original user.
     util_functions.change_ownership_recursively(args.output_dir, original_user, original_group)

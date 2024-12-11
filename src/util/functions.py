@@ -1,12 +1,14 @@
 from abc import ABC, abstractmethod
+import datetime
 import grp
 import os
 import pathlib
 import pprint
 import pwd
+import re
 import subprocess
 import sys
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -371,6 +373,136 @@ def validate_output_directory(output_dir: str) -> None:
     else:
         logger.info(f"Validated output directory:\n\t{output_dir}")
 
+def is_device_raid(device: str) -> bool:
+    """
+    Checks if the given device is part of a RAID configuration by looking at /proc/mdstat.
+    Provides detailed diagnostics if /proc/mdstat is missing.
+
+    Args:
+        device (str): The device path, e.g., "/dev/sda1".
+
+    Returns:
+        bool: True if the device is part of a RAID, False otherwise.
+    """
+    mdstat_path: str = "/proc/mdstat"
+
+    # Check if /proc/mdstat exists
+    if not os.path.exists(mdstat_path):
+        logger.info(f"Did not find: {mdstat_path}")
+
+        # Check if the md (multiple devices) kernel module is loaded
+        try:
+            result = subprocess.run(["lsmod"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if "md" not in result.stdout:
+                logger.info("The 'md' driver is not loaded. Try loading it with: sudo modprobe md.")
+            else:
+                print(f"The 'md' driver is loaded, but {mdstat_path} is missing. Check kernel configuration.")
+        except Exception as e:
+            logger.error(f"Could not check kernel modules:\n\t{e}")
+            # logger.error("Exiting.")
+            # sys.exit(1)
+
+        # Check if the kernel supports software RAID
+        try:
+            kernel_config_path: str = "/boot/config-$(uname -r)"
+            if os.path.exists(kernel_config_path):
+                with open(kernel_config_path, "r") as config:
+                    raid_support = any(line.strip() == "CONFIG_MD=y" for line in config)
+                    if not raid_support:
+                        logger.info("The kernel does not have RAID support enabled.")
+                    else:
+                        logger.info(f"RAID support is enabled in the kernel, but {mdstat_path} is missing.")
+            else:
+                logger.info("Could not locate kernel configuration. Ensure the system supports software RAID.")
+        except Exception as e:
+            logger.error(f"Error checking kernel configuration:\n\t{e}")
+            # logger.error("Exiting.")
+            # sys.exit(1)
+        
+        return False
+
+    # If /proc/mdstat exists, check if the device is listed
+    try:
+        with open(mdstat_path, "r") as f:
+            mdstat_content: str = f.read()
+        return device in mdstat_content
+    except Exception as e:
+        logger.error(f"Error reading {mdstat_path}:\n\t{e}")
+        return False
+
+def convert_to_unix_ts(timestamp: str) -> int:
+    """
+    Converts a timestamp string to a Unix timestamp.
+
+    Args:
+        timestamp (str): A timestamp string in the format 'Mon Dec  4 15:20:31 2023'.
+
+    Returns:
+        int: The corresponding Unix timestamp.
+    """
+    return int(datetime.strptime(timestamp, "%a %b %d %H:%M:%S %Y").timestamp())
+
+def parse_mdadm_output(file_path: str) -> Dict[str, Any]:
+    """
+    Parses the output of a successful 'mdadm --detail' call from a file.
+
+    Args:
+        file_path (str): Path to the file containing the 'mdadm --detail' output.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the parsed RAID details.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"The file {file_path} does not exist.")
+    
+    mdadm_data: Dict[str, Any] = {}
+    raid_devices: Dict[str, Dict[str, Any]] = {}
+    current_device: str = ""
+
+    with open(file_path, "r") as file:
+        for line in file:
+            line = line.strip()
+
+            # Match single-value fields
+            if line.startswith("Version :"):
+                mdadm_data['version'] = line.split(":", 1)[1].strip()
+            elif line.startswith("Creation Time :"):
+                creation_time = line.split(":", 1)[1].strip()
+                mdadm_data['creation_time'] = creation_time
+                mdadm_data['creation_time_ts'] = convert_to_unix_ts(creation_time)
+            elif line.startswith("Raid Level :"):
+                mdadm_data['raid_level'] = line.split(":", 1)[1].strip()
+            elif line.startswith("Raid Devices :"):
+                mdadm_data['raid_devices'] = int(line.split(":", 1)[1].strip())
+            elif line.startswith("Total Devices :"):
+                mdadm_data['total_devices'] = int(line.split(":", 1)[1].strip())
+            elif line.startswith("Consistency Policy :"):
+                mdadm_data['consistency_policy'] = line.split(":", 1)[1].strip()
+            elif line.startswith("UUID :"):
+                mdadm_data['uuid'] = line.split(":", 1)[1].strip()
+            elif line.startswith("Name :"):
+                mdadm_data['name'] = line.split(":", 1)[1].strip()
+            elif line.startswith("Events :"):
+                mdadm_data['events'] = int(line.split(":", 1)[1].strip())
+
+            # Match RAID device entries
+            elif re.match(r"^\s*\d+\s+\d+\s+\d+\s+\d+\s+\S+", line):
+                parts = line.split()
+                current_device = parts[-1]  # Last part is the device name (e.g., '/dev/sda1')
+                raid_devices[current_device] = {
+                    'number': int(parts[0]),
+                    'major': int(parts[1]),
+                    'minor': int(parts[2]),
+                    'raid_device': int(parts[3]),
+                    'state': " ".join(parts[4:-1]),  # Combine the state description
+                }
+
+    # Add parsed RAID devices to the dictionary
+    if raid_devices:
+        mdadm_data['raid_devices_details'] = raid_devices
+
+    return mdadm_data
+
 class MetricsToolProfile(ABC):
     """
     Encapsulates the logic of a monitoring tool such as `blktrace` or `pidstat`.
@@ -426,3 +558,4 @@ class PidstatToolProfile(MetricsToolProfile):
     def setup(self) -> None:
         os.makedirs(self.output_dir, exist_ok=True)
         super().setup()
+
