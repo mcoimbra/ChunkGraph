@@ -353,6 +353,18 @@ def parse_blkparse_native_output(file_path: str, pids: List[int]) -> pd.DataFram
                     continue
     return pd.DataFrame(data)
 
+def check_file_validity(file_path: str) -> bool:
+    """
+    Checks if a file exists, is a regular file, and is not empty.
+
+    Args:
+        file_path (str): Path to the file.
+
+    Returns:
+        bool: True if the file exists, is a regular file, and is not empty; False otherwise.
+    """
+    return os.path.isfile(file_path) and os.path.getsize(file_path) > 0
+
 def validate_device(device_path: str) -> None:
     if not os.path.exists(device_path):
         logger.error(f"Device '{device_path}' does not exist.")

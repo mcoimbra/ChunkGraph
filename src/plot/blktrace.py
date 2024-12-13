@@ -1,14 +1,18 @@
+import gzip
 import logging
 import math
 import os
+import pickle
 import sys
-from typing import List
+import time
+from typing import List, Set, Tuple
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 import seaborn
+from scipy.sparse import coo_matrix, dok_matrix
 
 # Logging import must come before other local project modules.
 import util.logging as log_conf
@@ -401,7 +405,16 @@ def plot_lba_count_heat_map(
         # Save the plot.
         plot_functions.save_figure(output_dir, f"{plot_basename}_top_{top_lba_count}_avg_block_sz", ["pdf", "png"])
 
-def write_lba_stat_xlsx(df: pd.DataFrame, output_dir: str, logical_block_sz: int = 4096, engine: str = "xlsxwriter", max_rows: int = 1048576) -> None:
+def write_lba_stat_xlsx(df: pd.DataFrame, output_dir: str, logical_block_sz: int = 4096, engine: str = "xlsxwriter", max_rows: int = 1048576, overwrite=True) -> None:
+
+    stats_csv_path: str = os.path.join(output_dir, "LBA_block_counts-stats.csv")
+    specs_csv_path: str = os.path.join(output_dir, "LBA_block_counts-specs.csv")
+    excel_out_path: str = os.path.join(output_dir, "LBA_block_counts.xlsx")
+
+    if not overwrite:
+        if util_functions.check_file_validity(stats_csv_path) and util_functions.check_file_validity(specs_csv_path) and util_functions.check_file_validity(excel_out_path):
+            logger.info(f"Not overwritting existing files:\n\t{stats_csv_path}\n\t{specs_csv_path}\n\t{excel_out_path}")
+            return
 
     # Filter valid data.
     filtered_df: pd.DataFrame = df.dropna(subset=["lba", "blocks"]).copy()
@@ -423,12 +436,6 @@ def write_lba_stat_xlsx(df: pd.DataFrame, output_dir: str, logical_block_sz: int
         {"Parameter": ["Logical Block Size"], "Value": [logical_block_sz]}
     )
 
-    # Write both sheets to the Excel file.
-    excel_out_path: str = os.path.join(output_dir, "LBA_block_counts.xlsx")
-    # with pd.ExcelWriter(excel_out_path, engine=engine) as writer:
-    #     lba_stats.to_excel(writer, index=False, sheet_name="LBA Stats")
-    #     specs_df.to_excel(writer, index=False, sheet_name="Specifications")
-
     # Write data to the Excel file
     with pd.ExcelWriter(excel_out_path, engine=engine) as writer:
         # Write specifications sheet
@@ -439,14 +446,13 @@ def write_lba_stat_xlsx(df: pd.DataFrame, output_dir: str, logical_block_sz: int
             chunk = lba_stats.iloc[i:i + max_rows]
             sheet_name = f"LBA Stats {i // max_rows + 1}"
             chunk.to_excel(writer, index=False, sheet_name=sheet_name)
-
     logger.info(f"Wrote LBA stats to Excel file:\n\t{excel_out_path}")
 
-    stats_csv_path: str = os.path.join(output_dir, "LBA_block_counts-stats.csv")
+    # Write stats data to a CSV file.
     lba_stats.to_csv(stats_csv_path, index=False)
     logger.info(f"Wrote LBA stats to CSV file:\n\t{stats_csv_path}")
 
-    specs_csv_path: str = os.path.join(output_dir, "LBA_block_counts-specs.csv")
+    # Write information on logical block value size to a CSV file.
     specs_df.to_csv(specs_csv_path, index=False)
     logger.info(f"Wrote LBA I/O specs to CSV file:\n\t{specs_csv_path}")
 
@@ -1063,3 +1069,668 @@ def plot_queue_depth_dynamic(queue_depth_timestamp: pd.DataFrame, plot_basename:
     pdf_out_path = os.path.join(output_dir, f"{plot_basename}.pdf")
     plt.savefig(pdf_out_path)
     plt.close()
+
+# Memory-naive version
+# def visualize_lba_blocks_over_time(df: pd.DataFrame, plot_basename: str, output_dir: str, granularity: float = 0.05
+# ) -> None:
+#     """
+#     Visualizes LBA accesses over time as a heatmap.
+
+#     Args:
+#         df (pd.DataFrame): Input DataFrame with 'timestamp', 'lba', and 'blocks' columns.
+#         plot_basename (str): Base name for the output plot file.
+#         output_dir (str): Directory to save the plot.
+#         granularity (float): Fraction of execution time for each time interval (default: 0.05).
+#     """
+
+#     # Compute execution time range
+#     min_timestamp = df["timestamp"].min()
+#     max_timestamp = df["timestamp"].max()
+#     execution_time = max_timestamp - min_timestamp
+
+#     # Define time bins based on granularity
+#     num_bins = int(1 / granularity)
+#     time_bins = np.linspace(min_timestamp, max_timestamp, num_bins + 1)
+#     time_labels = (time_bins[:-1] + time_bins[1:]) / 2  # Midpoints of the bins
+
+#     # Expand LBAs based on the "blocks" column
+#     expanded_lbas = []
+#     expanded_timestamps = []
+
+#     for _, row in df.iterrows():
+#         if pd.notna(row["lba"]) and pd.notna(row["blocks"]):
+#             lba_range = range(int(row["lba"]), int(row["lba"] + row["blocks"]))
+#             expanded_lbas.extend(lba_range)
+#             expanded_timestamps.extend([row["timestamp"]] * len(lba_range))
+
+#     expanded_df = pd.DataFrame({"timestamp": expanded_timestamps, "lba": expanded_lbas})
+
+#     # Bin the timestamps
+#     expanded_df["time_bin"] = pd.cut(expanded_df["timestamp"], bins=time_bins, labels=time_labels)
+
+#     # Count occurrences of LBAs in each time bin
+#     heatmap_data = expanded_df.groupby(["time_bin", "lba"]).size().unstack(fill_value=0)
+
+#     # Normalize colors by the maximum count
+#     max_count = heatmap_data.values.max()
+
+#     # Plot heatmap
+#     plt.figure(figsize=(12, 8))
+#     seaborn.heatmap(
+#         heatmap_data.T,  # Transpose to make LBAs on Y-axis
+#         cmap="YlGnBu",
+#         cbar=True,
+#         linewidths=0.5,
+#         linecolor="gray",
+#         vmin=0,
+#         vmax=max_count,
+#     )
+
+#     # Add labels and title
+#     plt.title(f"LBA Access Over Time ({granularity * 100:.1f}% Time Intervals)")
+#     plt.xlabel("Time (% Execution)")
+#     plt.ylabel("Logical Block Address (LBA)")
+
+#     # Adjust x-axis ticks
+#     plt.xticks(
+#         ticks=np.arange(len(time_labels)),
+#         labels=[f"{round(label, 2)}" for label in time_labels],
+#         rotation=45
+#     )
+
+#     # Save the plot
+#     #plot_filename = os.path.join(output_dir, f"{plot_basename}_heatmap.png")
+#     # plt.tight_layout()
+#     # plt.savefig(plot_filename)
+#     # plt.close()
+
+#     # print(f"Heatmap saved to {plot_filename}")
+
+#     plot_functions.save_figure(output_dir, f"{plot_basename}_{granularity*100}pct", ["pdf", "png"])
+
+# Memory-efficient version:
+# def visualize_lba_blocks_over_time(
+#     df: pd.DataFrame,
+#     plot_basename: str,
+#     output_dir: str,
+#     granularity: float = 0.05
+# ) -> None:
+#     """
+#     Visualizes LBA accesses over time as a heatmap in a memory-efficient manner.
+
+#     Args:
+#         df (pd.DataFrame): Input DataFrame with 'timestamp', 'lba', and 'blocks' columns.
+#         plot_basename (str): Base name for the output plot file.
+#         output_dir (str): Directory to save the plot.
+#         granularity (float): Fraction of execution time for each time interval (default: 0.05).
+#     """
+
+#     # Compute execution time range
+#     min_timestamp = df["timestamp"].min()
+#     max_timestamp = df["timestamp"].max()
+#     execution_time = max_timestamp - min_timestamp
+
+#     # Define time bins based on granularity
+#     num_bins = int(1 / granularity)
+#     time_bins = np.linspace(min_timestamp, max_timestamp, num_bins + 1)
+#     time_labels = (time_bins[:-1] + time_bins[1:]) / 2  # Midpoints of the bins
+
+#     # Initialize an empty sparse matrix for heatmap data
+#     from scipy.sparse import dok_matrix
+
+#     unique_lbas = df["lba"].dropna().unique()
+#     lba_indices = {lba: idx for idx, lba in enumerate(sorted(unique_lbas))}
+#     heatmap_matrix = dok_matrix((len(lba_indices), num_bins), dtype=int)
+
+#     # Incrementally populate the heatmap matrix
+#     for _, row in df.iterrows():
+#         if pd.notna(row["lba"]) and pd.notna(row["blocks"]):
+#             start_lba = int(row["lba"])
+#             for offset in range(int(row["blocks"])):
+#                 lba = start_lba + offset
+#                 if lba in lba_indices:
+#                     time_bin = np.digitize(row["timestamp"], time_bins) - 1
+#                     if 0 <= time_bin < num_bins:
+#                         heatmap_matrix[lba_indices[lba], time_bin] += 1
+
+#     # Convert sparse matrix to dense for visualization
+#     heatmap_data = pd.DataFrame.sparse.from_spmatrix(
+#         heatmap_matrix, index=sorted(lba_indices.keys()), columns=time_labels
+#     )
+
+#     # Normalize colors by the maximum count
+#     max_count = heatmap_data.max().max()
+
+#     # Plot heatmap
+#     plt.figure(figsize=(12, 8))
+#     seaborn.heatmap(
+#         heatmap_data,
+#         cmap="YlGnBu",
+#         cbar=True,
+#         linewidths=0.5,
+#         linecolor="gray",
+#         vmin=0,
+#         vmax=max_count,
+#     )
+
+#     # Add labels and title
+#     plt.title(f"LBA Access Over Time ({granularity * 100:.1f}% Time Intervals)")
+#     plt.xlabel("Time (% Execution)")
+#     plt.ylabel("Logical Block Address (LBA)")
+
+#     # Adjust x-axis ticks
+#     plt.xticks(
+#         ticks=np.arange(len(time_labels)),
+#         labels=[f"{round(label, 2)}" for label in time_labels],
+#         rotation=45
+#     )
+
+#     # Save the plot
+#     plot_functions.save_figure(output_dir, f"{plot_basename}_{granularity*100}pct", ["pdf", "png"])
+
+
+# Memory-efficient version, hopefully faster:
+# def visualize_lba_blocks_over_time(
+#     df: pd.DataFrame,
+#     plot_basename: str,
+#     output_dir: str,
+#     granularity: float = 0.05
+# ) -> None:
+#     """
+#     Visualizes LBA accesses over time as a heatmap in a memory-efficient manner.
+
+#     Args:
+#         df (pd.DataFrame): Input DataFrame with 'timestamp', 'lba', and 'blocks' columns.
+#         plot_basename (str): Base name for the output plot file.
+#         output_dir (str): Directory to save the plot.
+#         granularity (float): Fraction of execution time for each time interval (default: 0.05).
+#     """
+
+#     # Compute execution time range
+#     start_time: float = time.perf_counter()
+#     min_timestamp = df["timestamp"].min()
+#     max_timestamp = df["timestamp"].max()
+#     execution_time = max_timestamp - min_timestamp
+#     end_time: float = time.perf_counter()
+#     logger.info(f"Computed execution time range: (took {end_time-start_time})\n\t[{min_timestamp} - {max_timestamp}] ({execution_time}).")
+    
+
+#     # Define time bins based on granularity
+#     start_time: float = time.perf_counter()
+#     num_bins = int(1 / granularity)
+#     time_bins = np.linspace(min_timestamp, max_timestamp, num_bins + 1)
+#     time_bin_indices = np.digitize(df["timestamp"], time_bins) - 1
+#     end_time: float = time.perf_counter()
+#     logger.info(f"Defined time bins based on granularity (took {end_time-start_time}).")
+
+#     # Filter invalid rows.
+#     start_time: float = time.perf_counter()
+#     valid_rows = df.dropna(subset=["lba", "blocks"])
+#     valid_rows = valid_rows[(time_bin_indices >= 0) & (time_bin_indices < num_bins)]
+#     valid_rows["time_bin"] = time_bin_indices
+#     end_time: float = time.perf_counter()
+#     logger.info(f"Filtered invalid rows (took {end_time-start_time}).")
+
+#     # Expand LBAs and Blocks.
+#     start_time: float = time.perf_counter()
+#     expanded_lbas = valid_rows.apply(
+#         lambda row: [(int(row["lba"]) + offset, row["time_bin"]) for offset in range(int(row["blocks"]))],
+#         axis=1
+#     )
+#     expanded_lbas = [item for sublist in expanded_lbas for item in sublist]
+#     end_time: float = time.perf_counter()
+#     logger.info(f"Expanded LBAs and blocks (took {end_time-start_time}).")
+
+#     # Aggregate counts.
+#     start_time: float = time.perf_counter()
+#     lbas, time_bins = zip(*expanded_lbas)
+#     lba_indices, unique_lbas = pd.factorize(lbas)
+#     heatmap_coo = coo_matrix(
+#         (np.ones_like(lba_indices), (lba_indices, time_bins)),
+#         shape=(len(unique_lbas), num_bins)
+#     )
+#     heatmap_dense = heatmap_coo.toarray()
+#     end_time: float = time.perf_counter()
+#     logger.info(f"Aggregated counts (took {end_time-start_time}).")
+
+#     # Normalize for plotting
+#     start_time: float = time.perf_counter()
+#     heatmap_df = pd.DataFrame(
+#         heatmap_dense,
+#         index=unique_lbas,
+#         columns=np.linspace(0, 100, num_bins)  # Percent execution
+#     )
+#     end_time: float = time.perf_counter()
+#     logger.info(f"Normalized for plotting (took {end_time-start_time}).")
+
+#     # Plot heatmap
+#     plt.figure(figsize=(12, 8))
+#     seaborn.heatmap(
+#         heatmap_df,
+#         cmap="YlGnBu",
+#         cbar=True,
+#         linewidths=0.5,
+#         linecolor="gray",
+#         vmin=0
+#     )
+
+#     # Add labels and title
+#     plt.title(f"LBA Access Over Time ({granularity * 100:.1f}% Time Intervals)")
+#     plt.xlabel("Time (% Execution)")
+#     plt.ylabel("Logical Block Address (LBA)")
+
+#     # Save the plot
+#     plot_functions.save_figure(output_dir, f"{plot_basename}_{granularity*100}pct", ["pdf", "png"])
+
+# def visualize_lba_blocks_over_time(
+#     df: pd.DataFrame,
+#     plot_basename: str,
+#     output_dir: str,
+#     granularity: float = 0.05
+# ) -> None:
+#     """
+#     Visualizes LBA accesses over time as a heatmap in a memory-efficient manner.
+
+#     Args:
+#         df (pd.DataFrame): Input DataFrame with 'timestamp', 'lba', and 'blocks' columns.
+#         plot_basename (str): Base name for the output plot file.
+#         output_dir (str): Directory to save the plot.
+#         granularity (float): Fraction of execution time for each time interval (default: 0.05).
+#     """
+
+#     # Compute execution time range
+#     start_time = time.perf_counter()
+#     min_timestamp = df["timestamp"].min()
+#     max_timestamp = df["timestamp"].max()
+#     execution_time = max_timestamp - min_timestamp
+#     end_time = time.perf_counter()
+#     logger.info(f"Computed execution time range: (took {end_time-start_time})\n\t[{min_timestamp} - {max_timestamp}] ({execution_time}).")
+    
+#     # Define time bins based on granularity
+#     start_time = time.perf_counter()
+#     num_bins = int(1 / granularity)
+#     time_bins = np.linspace(min_timestamp, max_timestamp, num_bins + 1)
+#     end_time = time.perf_counter()
+#     logger.info(f"Defined time bins based on granularity (took {end_time-start_time}).")
+
+#     # Filter valid rows
+#     start_time = time.perf_counter()
+#     valid_rows = df.dropna(subset=["lba", "blocks"]).copy()
+#     time_bin_indices = np.digitize(valid_rows["timestamp"], time_bins) - 1
+#     valid_rows = valid_rows[(time_bin_indices >= 0) & (time_bin_indices < num_bins)]
+#     valid_rows["time_bin"] = time_bin_indices
+#     end_time = time.perf_counter()
+#     logger.info(f"Filtered valid rows (took {end_time-start_time}).")
+
+#     # Expand LBAs and Blocks
+#     start_time = time.perf_counter()
+#     expanded_lbas = valid_rows.apply(
+#         lambda row: [(int(row["lba"]) + offset, row["time_bin"]) for offset in range(int(row["blocks"]))],
+#         axis=1
+#     )
+#     expanded_lbas = [item for sublist in expanded_lbas for item in sublist]
+#     end_time = time.perf_counter()
+#     logger.info(f"Expanded LBAs and blocks (took {end_time-start_time}).")
+
+#     # Aggregate counts
+#     start_time = time.perf_counter()
+#     lbas, time_bins = zip(*expanded_lbas)
+#     lba_indices, unique_lbas = pd.factorize(lbas)
+#     heatmap_coo = coo_matrix(
+#         (np.ones_like(lba_indices), (lba_indices, time_bins)),
+#         shape=(len(unique_lbas), num_bins)
+#     )
+#     heatmap_dense = heatmap_coo.toarray()
+#     end_time = time.perf_counter()
+#     logger.info(f"Aggregated counts (took {end_time-start_time}).")
+
+#     # Normalize for plotting
+#     start_time = time.perf_counter()
+#     heatmap_df = pd.DataFrame(
+#         heatmap_dense,
+#         index=unique_lbas,
+#         columns=np.linspace(0, 100, num_bins)  # Percent execution
+#     )
+#     end_time = time.perf_counter()
+#     logger.info(f"Normalized for plotting (took {end_time-start_time}).")
+
+#     # Plot heatmap
+#     plt.figure(figsize=(12, 8))
+#     seaborn.heatmap(
+#         heatmap_df,
+#         cmap="YlGnBu",
+#         cbar=True,
+#         linewidths=0.5,
+#         linecolor="gray",
+#         vmin=0
+#     )
+
+#     # Add labels and title
+#     plt.title(f"LBA Access Over Time ({granularity * 100:.1f}% Time Intervals)")
+#     plt.xlabel("Time (% Execution)")
+#     plt.ylabel("Logical Block Address (LBA)")
+
+#     # Save the plot
+#     plot_functions.save_figure(output_dir, f"{plot_basename}_{granularity*100}pct", ["pdf", "png"])
+
+# def process_in_chunks(df: pd.DataFrame, num_bins: int) -> Tuple[coo_matrix, List[int]]:
+#     """
+#     Process DataFrame in chunks to populate a sparse matrix.
+
+#     Args:
+#         df (pd.DataFrame): The input DataFrame.
+#         num_bins (int): Number of time bins.
+#         logger: Logger for logging progress.
+
+#     Returns:
+#         coo_matrix: Sparse matrix of aggregated counts.
+#     """
+#     # Extract unique LBAs and map them to indices.
+#     unique_lbas: List[int] = sorted(df["lba"].unique())
+#     lba_to_index = {lba: i for i, lba in enumerate(unique_lbas)}
+#     num_lbas: int = len(unique_lbas)
+
+#     # Initialize sparse matrix.
+#     heatmap_coo: dok_matrix = dok_matrix((num_lbas, num_bins), dtype=np.int32)
+
+#     # Process the DataFrame in chunks.
+#     chunk_size: int = 1_000_000  # Adjust as needed.
+#     num_chunks: int = (len(df) + chunk_size - 1) // chunk_size
+#     logger.info(f"Processing DataFrame in {num_chunks} chunks...")
+
+#     for chunk_start in range(0, len(df), chunk_size):
+
+#         start_time: float = time.perf_counter()
+
+#         chunk_end: int = min(chunk_start + chunk_size, len(df))
+#         chunk = df.iloc[chunk_start:chunk_end]
+
+#         logger.info(f"Processing rows {chunk_start} to {chunk_end}...")
+
+#         # Process each row in the chunk.
+#         # TODO: this part may benefit from memory improvements avoiding iterrows()
+#         # as a we are only processing 1M-sized chunks, an approach that uses more memory
+#         # may become possible since we are doing chunking.
+#         for _, row in chunk.iterrows():
+#             base_lba: int = int(row["lba"])
+#             time_bin = row["time_bin"]
+#             blocks: int = int(row["blocks"])
+
+#             for offset in range(blocks):
+#                 lba: int = base_lba + offset
+#                 if lba in lba_to_index:
+#                     heatmap_coo[lba_to_index[lba], time_bin] += 1
+
+#         end_time: float = time.perf_counter()
+#         logger.info(f"Rows {chunk_start}-{chunk_end} ({chunk_end-chunk_start}) took {end_time-start_time} s).")
+
+#     # Convert to COO format.
+#     return heatmap_coo.tocoo(), unique_lbas
+
+def process_in_chunks(df: pd.DataFrame, num_bins: int, checkpoints_dir: str, compression: bool = True) -> Tuple[coo_matrix, List[int]]:
+    """
+    Process DataFrame in chunks to populate a sparse matrix.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame.
+        num_bins (int): Number of time bins.
+
+    Returns:
+        Tuple[coo_matrix, List[int]]: Sparse matrix of aggregated counts and unique LBAs.
+    """
+    # Extract unique LBAs and map them to indices.
+    unique_lbas: List[int] = sorted(df["lba"].unique())
+    lba_to_index = {lba: i for i, lba in enumerate(unique_lbas)}
+    num_lbas: int = len(unique_lbas)
+
+    # Compute intermediate checkpoint file names.
+    checkpoint_file: str = os.path.join(checkpoints_dir, f"progress.pkl")
+    completed_chunks: Set = set()
+
+    # Check if there is a checkpoint to resume from.
+    if os.path.exists(checkpoint_file):
+        with open(checkpoint_file, "rb") as f:
+            checkpoint_data = pickle.load(f)
+        completed_chunks = checkpoint_data["completed_chunks"]
+        logger.info(f"Resuming from checkpoint. {len(completed_chunks)} chunks already processed.")
+    else:
+        # Initialize a fresh sparse matrix if no checkpoint
+        logger.info("Starting new computation, no checkpoint found.")
+        
+
+    # Process the DataFrame in chunks.
+    # TODO: chunk_size should be estimated from running system's total memory and from the size of `df` row...
+    chunk_size: int = 1_000_000  # Adjust as needed.
+    num_chunks: int = (len(df) + chunk_size - 1) // chunk_size
+    logger.info(f"Processing DataFrame in {num_chunks} chunks...")
+
+    for chunk_start in range(0, len(df), chunk_size):
+        
+        chunk_end: int = min(chunk_start + chunk_size, len(df))
+        chunk_id = (chunk_start, chunk_end)
+
+        # Skip already processed chunks.
+        if chunk_id in completed_chunks:
+            logger.info(f"Skipping already processed chunk: {chunk_id}.")
+            continue
+
+        start_time: float = time.perf_counter()
+
+        chunk = df.iloc[chunk_start:chunk_end]
+
+        logger.info(f"Processing rows {chunk_start} to {chunk_end}...")
+
+        # Vectorized processing of the chunk.
+        base_lbas = chunk["lba"].values
+        time_bins = chunk["time_bin"].values
+        block_counts = chunk["blocks"].values
+
+        # Expand LBAs and replicate time bins for block counts.
+        lba_offsets = np.concatenate([np.arange(block_count) for block_count in block_counts])
+        expanded_lbas = np.repeat(base_lbas, block_counts) + lba_offsets
+        expanded_time_bins = np.repeat(time_bins, block_counts)
+
+        # Map expanded LBAs to indices.
+        mapped_lba_indices = np.array([lba_to_index.get(lba, -1) for lba in expanded_lbas])
+
+        # Filter valid indices.
+        valid_indices = mapped_lba_indices >= 0
+        valid_lbas = mapped_lba_indices[valid_indices]
+        valid_time_bins = expanded_time_bins[valid_indices]
+
+        # Accumulate updates for the chunk.
+        chunk_coo = coo_matrix(
+            (np.ones_like(valid_lbas), (valid_lbas, valid_time_bins)),
+            shape=(num_lbas, num_bins)
+        )
+
+        # Save the current chunk's sparse matrix to disk.
+        if compression:
+            chunk_file: str = os.path.join(checkpoints_dir, f"chunk_{chunk_start}_{chunk_end}.pkl.gz")
+            with gzip.open(chunk_file, "wb") as f:
+                pickle.dump(chunk_coo, f)
+        else:
+            chunk_file: str = os.path.join(checkpoints_dir, f"chunk_{chunk_start}_{chunk_end}.npz")
+            with open(chunk_file, "wb") as f:
+                pickle.dump(chunk_coo, f)
+
+        # Update the progress file.
+        completed_chunks.add(chunk_id)
+        with open(checkpoint_file, "wb") as f:
+            pickle.dump({"completed_chunks": completed_chunks}, f)
+        logger.info(f"Chunk {chunk_id} saved to {chunk_file}.")
+        end_time: float = time.perf_counter()
+        logger.info(f"Rows {chunk_start}-{chunk_end} ({chunk_end-chunk_start}) took {end_time-start_time} s).")
+
+
+    # Combine all chunk matrices into a single sparse matrix
+    start_time: float = time.perf_counter()
+    final_matrix = coo_matrix((num_lbas, num_bins), dtype=np.int32)
+    for chunk_start in range(0, len(df), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(df))
+        if compression:
+            chunk_file = os.path.join(checkpoints_dir, f"chunk_{chunk_start}_{chunk_end}.pkl.gz")
+            if os.path.exists(chunk_file):
+                with gzip.open(chunk_file, "rb") as f:
+                    chunk_coo = pickle.load(f)
+                final_matrix += chunk_coo
+            else:
+                logger.error("Exiting because I did not find expectd chunk file:\n\t{chunk_file}")
+                sys.exit(1)
+        else:
+            chunk_file = os.path.join(checkpoints_dir, f"chunk_{chunk_start}_{chunk_end}.npz")
+            if os.path.exists(chunk_file):
+                with open(chunk_file, "rb") as f:
+                    chunk_coo = pickle.load(f)
+                final_matrix += chunk_coo
+            else:
+                logger.error("Exiting because I did not find expectd chunk file:\n\t{chunk_file}")
+                sys.exit(1)
+    
+    end_time: float = time.perf_counter()
+    logger.info(f"Combining all chunks into the final sparse matrix (took {end_time-start_time} s).")
+
+    # Convert to COO format.
+    return final_matrix, unique_lbas
+    #return heatmap_coo.tocoo(), unique_lbas
+
+def visualize_lba_blocks_over_time( 
+    df: pd.DataFrame,
+    plot_basename: str,
+    output_dir: str,
+    time_granularities: List[float] = [0.05],
+    lba_aggregations: List[int] = [2, 4, 16, 64, 256, 1024, 4096]
+) -> None:
+    """
+    Visualizes LBA accesses over time as a heatmap in a memory-efficient manner.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame with 'timestamp', 'lba', and 'blocks' columns.
+        plot_basename (str): Base name for the output plot file.
+        output_dir (str): Directory to save the plot.
+        granularity (float): Fraction of execution time for each time interval (default: 0.05).
+    """
+
+    # Compute execution time range.
+    start_time: float = time.perf_counter()
+    min_timestamp: float = df["timestamp"].min()
+    max_timestamp: float = df["timestamp"].max()
+    execution_time: float = max_timestamp - min_timestamp
+    end_time: float = time.perf_counter()
+    logger.info(f"Computed execution time range: (took {end_time-start_time})\n\t[{min_timestamp} - {max_timestamp}] ({execution_time} s).")
+
+    # Filter valid rows. We call `copy()` here so that `df` is not modified outside this function.
+    start_time: float = time.perf_counter()
+    valid_rows_orig: pd.DataFrame = df.dropna(subset=["lba", "blocks"]).copy()
+    end_time: float = time.perf_counter()
+    logger.info(f"Filtered valid rows (took {end_time-start_time} s).")
+
+    for granularity in time_granularities:
+
+        logger.info(f"Generating LBAs over time in {int(granularity*100)}% steps of total execution...")
+
+        # Define time bins based on granularity.
+        start_time: float = time.perf_counter()
+        num_bins: int = int(1 / granularity)
+        time_bins: np.ndarray = np.linspace(min_timestamp, max_timestamp, num_bins + 1)
+        end_time: float = time.perf_counter()
+        logger.info(f"Defined time bins based on granularity (took {end_time-start_time} s).")
+
+        # Compute time bin indices only for valid rows.
+        valid_rows: pd.DataFrame = valid_rows_orig.copy()
+        start_time: float = time.perf_counter()
+        valid_rows["time_bin"] = np.digitize(valid_rows["timestamp"], time_bins) - 1
+        end_time: float = time.perf_counter()
+        logger.info(f"Computing time bin indices for valid rows (took {end_time-start_time} s).")
+
+        # Remove rows with invalid time bins.
+        start_time: float = time.perf_counter()
+        valid_rows = valid_rows[(valid_rows["time_bin"] >= 0) & (valid_rows["time_bin"] < num_bins)]
+        end_time: float = time.perf_counter()
+        logger.info(f"Removed rows with invalid time bins (took {end_time-start_time} s).")
+
+        # Process the `pd.DataFrame` in chunks to populate a sparse matrix.
+        start_time: float = time.perf_counter()
+        f_name: str = sys._getframe().f_code.co_name
+        checkpoints_dir: str = os.path.join(output_dir, f"{f_name}-XX_{int(granularity*100)}pct")
+        os.makedirs(checkpoints_dir, exist_ok=True)
+        logger.info(f"Using the following directory to store intermediate chunks:\n\t{checkpoints_dir}")
+        heatmap_coo, unique_lbas = process_in_chunks(valid_rows, num_bins, checkpoints_dir, compression=True)
+        heatmap_coo: coo_matrix 
+        unique_lbas: List[int]
+        heatmap_dense: np.ndarray = heatmap_coo.toarray()
+        end_time: float = time.perf_counter()
+        logger.info(f"Efficiently aggregated counts into sparse matrix (took {end_time - start_time} s).")
+        logger.info(f"Unrolled base LBAs w/ block sizes to a total of {len(unique_lbas)}")
+
+        for lba_agg_factor in lba_aggregations:
+
+            logger.info(f"Aggregating LBAs in groups of size {lba_agg_factor}...")
+
+            # Aggregate LBAs.
+            heatmap_dense_cp = heatmap_dense.copy()
+            
+            # Calculate the remainder.
+            num_rows, num_cols = heatmap_dense_cp.shape
+            remainder = num_rows % lba_agg_factor
+            target_lbas: List[int] = copy.deepcopy(unique_lbas)
+
+            # Handle remainders separately
+            if remainder != 0:
+                padded_rows = lba_agg_factor - remainder
+                heatmap_dense_cp = np.pad(heatmap_dense_cp, ((0, padded_rows), (0, 0)), mode="constant")
+                target_lbas.extend([f"Padding-{i}" for i in range(padded_rows)])  # Extend unique_lbas for padding
+
+
+            #heatmap_dense_agg = heatmap_dense_cp.reshape(-1, lba_agg_factor, heatmap_dense_cp.shape[1]).sum(axis=1)
+            # Reshape and aggregate
+            heatmap_dense_agg = heatmap_dense_cp.reshape(-1, lba_agg_factor, num_cols).sum(axis=1)
+
+            # Update unique LBAs and time bins.
+            # unique_lbas_agg = [
+            #     f"{unique_lbas[i]}-{unique_lbas[i+lba_agg_factor-1]}"
+            #     for i in range(0, len(unique_lbas), lba_agg_factor)
+            # ]
+            unique_lbas_agg = [
+                f"{target_lbas[i]}-{target_lbas[i+lba_agg_factor-1]}"
+                for i in range(0, len(target_lbas), lba_agg_factor)
+            ]
+
+            # Normalize for plotting.
+            start_time: float = time.perf_counter()
+            heatmap_df_agg = pd.DataFrame(
+                heatmap_dense_agg,
+                index=unique_lbas_agg,
+                columns=np.linspace(0, 100, num_bins)  # Percent execution
+            )
+            # heatmap_df: pd.DataFrame = pd.DataFrame(
+            #     heatmap_dense,
+            #     index=unique_lbas,
+            #     columns=np.linspace(0, 100, num_bins)  # Percent execution
+            # )
+            end_time: float = time.perf_counter()
+            logger.info(f"Normalized for plotting (took {end_time-start_time} s).")
+
+            # Plot heatmap.
+            start_time: float = time.perf_counter()
+            plt.figure(figsize=(12, 8))
+            seaborn.heatmap(
+                #heatmap_df,
+                heatmap_df_agg,
+                cmap="YlGnBu",
+                cbar=True,
+                linewidths=0.5,
+                linecolor="gray",
+                vmin=0
+            )
+
+            # Add labels and title.
+            plt.title(f"LBA Access Over Time ({int(granularity * 100)}% Time Intervals)")
+            plt.xlabel(f"Time (% Execution) ({int(granularity * 100)}% steps)")
+            plt.ylabel("Logical Block Address (LBA) ({lba_agg_factor} steps)")
+            plt.tight_layout()
+
+            # Save the plot.
+            plot_functions.save_figure(output_dir, f"{plot_basename}_XX_{int(granularity*100)}pct_YY_{lba_agg_factor}", ["pdf", "png"])
+            end_time: float = time.perf_counter()
+            logger.info(f"Finished heat map image generation (took {end_time - start_time} s).")

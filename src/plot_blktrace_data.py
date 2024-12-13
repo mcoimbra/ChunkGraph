@@ -20,6 +20,16 @@ import plot.blktrace as blktrace_plotting
 
 SCRIPT_DIR: str = os.path.dirname(os.path.abspath(__file__))
 
+PLOT_TYPES: List[str] = [
+    "visualize_throughput_overview",
+    "visualize_latency_overview",
+    "visualize_queue_depth_overview",
+    "visualize_lba_blocks_over_time",
+    "plot_block_size_histogram",
+    "plot_top_n_lba_counts_histogram",
+    "plot_lba_count_heat_map"
+]
+
 def create_arg_parser() -> argparse.ArgumentParser:
     parser: argparse.ArgumentParser = argparse.ArgumentParser(description="Plot blktrace data.")
 
@@ -39,10 +49,29 @@ def create_arg_parser() -> argparse.ArgumentParser:
         "--generate_tsv", required=False, action="store_true",
         help="Generate a TSV file from the `blkparse` output?"
     )
-
     parser.add_argument(
         "--per_cpu_plots", required=False, action="store_true",
         help="Should per-CPU visualizations be plotted?"
+    )
+
+    def parse_plot_types(value: str) -> List[str]:
+        """
+        Custom parser to validate and parse a comma-separated list of tools.
+        """
+        plots: List[str] = value.split(",")  # Split the input string by commas
+        invalid_plots: List[str] = [tool for tool in plots if tool not in PLOT_TYPES]
+        if len(invalid_plots) > 0:
+            raise argparse.ArgumentTypeError(
+                f"Invalid tools: {', '.join(invalid_plots)}. Must be one of: {', '.join(PLOT_TYPES)}."
+            )
+        return plots
+
+    parser.add_argument(
+        "-p", "--plot_types",
+        default=[],
+        type=parse_plot_types,
+        required=False,
+        help=f"Choose the desired plot types. Must be one or more of: {', '.join(PLOT_TYPES)}."
     )
     
 
@@ -443,7 +472,9 @@ def check_and_get_blktrace_file(directory: str) -> str:
                 return full_path
     return ""
 
-# python3 -m src.plot_blktrace_data -i "Outputs/ChunkGraph-LiveJournal-test/blktrace" -o "Outputs/ChunkGraph-LiveJournal-test/blktrace" --device-path "/dev/nvme0n1"
+
+
+# python3 -m src.plot_blktrace_data -i "Outputs/ChunkGraph-LiveJournal-test/blktrace" -o "Outputs/ChunkGraph-LiveJournal-test/blktrace"
 
 # python3 -m src.plot_blktrace_data -i "Outputs/ChunkGraph-LiveJournal-test/blktrace" -o "Outputs/ChunkGraph-LiveJournal-test/blktrace"
 
@@ -454,7 +485,6 @@ def main():
     args: argparse.Namespace = parser.parse_args()
 
     # Validate inputs.
-    #util_functions.validate_device(args.device_path)
     util_functions.validate_output_directory(args.output_dir)
 
     # Argument validation.
@@ -489,91 +519,115 @@ def main():
     else:
         logger.info(f"Skipped TSV file generation.")
 
-    # TODO: pass CSV path to parse_blkparse_output. Either adapt the function to check if
-    # it received a .txt or .csv file, or create a new function.
-
     # Read `blktrace` data into a pandas.DataFrame.
-    #df: pd.DataFrame = util_functions.parse_blkparse_output(trace_file_path, pids)
     start_time: float = time.perf_counter()
     df: pd.DataFrame = util_functions.parse_blkparse_output(target_tsv_path, pids)
     end_time: float = time.perf_counter()
-    logger.info(f"Finished reading blktrace data ({end_time-start_time}).")
+    logger.info(f"Finished reading blktrace data ({end_time-start_time}).")    
 
-    
-
-    # TODO: Filter by `program_handle.pid()`.
+    # TODO: Filter `df` by `program_handle.pid()`.
     count_row: int = df.shape[0]  # Gives number of rows
     count_col: int = df.shape[1]  # Gives number of columns
-    logger.info(f"'blktrace' dataframe has {count_row} lines and {count_col} columns.")
+    logger.info(f"'blktrace' dataframe has {count_row} rows and {count_col} columns.")
 
+    # Ensure output directories exist.
     blktrace_plots_dir: str = os.path.join(args.input_dir, "plots")
     os.makedirs(blktrace_plots_dir, exist_ok=True)
 
     blktrace_data_dir: str = os.path.join(args.input_dir, "data")
     os.makedirs(blktrace_data_dir, exist_ok=True)
 
-    # TODO: logical_block_sz, chunk_sz ()should have been written to context.json
+    # TODO: logical_block_sz, chunk_sz ()should have been written to context.json, read it from there.
+    logical_block_sz: int = 4096
     # during workload execution script (before calling workload):
     # chunk_sz - sudo mdadm --detail device_path
     # logical_block_sz - sudo blockdev -getbsz device_path
+    # NOTE: if chunk_sz is missing, means we were not in a RAID setting.
 
-    # Plot histogram of operation size:
-    # - Histogram of the number of logical blocks from operations.
-    # - Histogram of the physical size (number of logical blocks * size of logical block) of operations.
-    # Logical block size obtained with: sudo blockdev -getbsz DEVICE
-    # Physical chunk size obtained with: sudo mdadm --detail DEVICE
-    title: str = "Histogram: I/O Block Sizes"
-    start_time: float = time.perf_counter()
-    blktrace_plotting.plot_block_size_histogram(df, f"{plot_basename}_IO_blk_histogram", blktrace_plots_dir, title) 
-    end_time: float = time.perf_counter()
-    logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
+    # Write LBA stats to Excel and CSV files.
+    blktrace_plotting.write_lba_stat_xlsx(df, blktrace_data_dir, logical_block_sz = logical_block_sz, overwrite=False)
+    
+    # List the plotting functions that will be used.
+    if len(args.plot_types) == 0:
+        logger.info(f"No plots required, possible ones:\n\t{args.plot_types}") 
+        logger.info("preprocessing already done. Exiting.")
+        sys.exit(0)
+    else:
+        logger.info(f"Plotting:\n\t" + '\n\t'.join(args.plot_types))
 
-    title: str = "Histogram: LBA Counts"
-    start_time: float = time.perf_counter()
-    blktrace_plotting.plot_top_n_lba_counts_histogram(df, f"{plot_basename}_IO_lba_histogram", blktrace_plots_dir,
-    title, top_n = 20)
-    end_time: float = time.perf_counter()
-    logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
+    if "visualize_lba_blocks_over_time" in args.plot_types:
+        logger.info(f"Running: blktrace_plotting.visualize_lba_blocks_over_time")
+        start_time: float = time.perf_counter()
+        blktrace_plotting.visualize_lba_blocks_over_time(df, 
+                f"{plot_basename}-lba_all_blocks_over_time", 
+                blktrace_plots_dir,
+                time_granularities = [0.05],
+                lba_aggregations = [2, 4, 16, 64, 256, 1024, 4096])
+        end_time: float = time.perf_counter()
+        logger.info(f"visualize_lba_blocks_over_time time: {end_time-start_time}")
 
-    # Plot heat maps and scatter plot of accesses per logical block address.
-    # - Heat map with the counts of LBA accesses.
-    # - Heat map with the physical size of LBA accesses.
-    title: str = "Heat map: LBA counts"
-    start_time: float = time.perf_counter()
-    blktrace_plotting.plot_lba_count_heat_map(df, 
-            f"{plot_basename}_IO_lba_heat_map", 
-            blktrace_plots_dir, title, 
-            block_threshold_ratios=[0, 0.00005, 0.0005, 0.05],
-            top_lbas=[10, 20]) 
+    if "plot_block_size_histogram" in args.plot_types:
+        # Plot histogram of operation size:
+        # - Histogram of the number of logical blocks from operations.
+        # - Histogram of the physical size (number of logical blocks * size of logical block) of operations.
+        # Logical block size obtained with: sudo blockdev -getbsz DEVICE
+        # Physical chunk size obtained with: sudo mdadm --detail DEVICE
+        title: str = "Histogram: I/O Block Sizes"
+        start_time: float = time.perf_counter()
+        blktrace_plotting.plot_block_size_histogram(df, f"{plot_basename}_IO_blk_histogram", blktrace_plots_dir, title) 
+        end_time: float = time.perf_counter()
+        logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
 
-    end_time: float = time.perf_counter()
-    logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
+    if "plot_top_n_lba_counts_histogram" in args.plot_types:
+        title: str = "Histogram: LBA Counts"
+        start_time: float = time.perf_counter()
+        blktrace_plotting.plot_top_n_lba_counts_histogram(df, f"{plot_basename}_IO_lba_histogram", blktrace_plots_dir,
+        title, top_n = 20)
+        end_time: float = time.perf_counter()
+        logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
 
-    # Write LBA stats to Excel file.
-    blktrace_plotting.write_lba_stat_xlsx(df, blktrace_data_dir, logical_block_sz = 4096)
-    sys.exit(0)
+    if "plot_lba_count_heat_map" in args.plot_types:
+        # Plot heat maps and scatter plot of accesses per logical block address.
+        # - Heat map with the counts of LBA accesses.
+        # - Heat map with the physical size of LBA accesses.
+        title: str = "Heat map: LBA counts"
+        start_time: float = time.perf_counter()
+        blktrace_plotting.plot_lba_count_heat_map(df, 
+                f"{plot_basename}_IO_lba_heat_map", 
+                blktrace_plots_dir, title, 
+                block_threshold_ratios=[0, 0.00005, 0.0005, 0.05],
+                top_lbas=[10, 20]) 
 
-    # Visualize throughput.
-    # start_time: float = time.perf_counter()
-    # visualize_throughput_overview(df, f"{plot_basename}-throughput", blktrace_plots_dir)
-    # end_time: float = time.perf_counter()
-    # logger.info(f"Throughput plotting total time: {end_time-start_time}")
+        end_time: float = time.perf_counter()
+        logger.info(f"PLOT: {title} | time: {end_time-start_time:.2f}")
 
-    if args.per_cpu_plots:
-        visualize_throughput_per_cpu(df, f"{plot_basename}-throughput", blktrace_plots_dir)
+    
+        
+    if "visualize_throughput_overview" in args.plot_types:
+        logger.info(f"Running: visualize_throughput_overview")
+        start_time: float = time.perf_counter()
+        visualize_throughput_overview(df, f"{plot_basename}-throughput", blktrace_plots_dir)
+        end_time: float = time.perf_counter()
+        logger.info(f"Throughput plotting total time: {end_time-start_time}")
 
-    # Visualize latencies.
-    start_time: float = time.perf_counter()
-    visualize_latency_overview(df, f"{plot_basename}-latency", blktrace_plots_dir)
-    end_time: float = time.perf_counter()
-    logger.info(f"Latency plotting total time: {end_time-start_time}")
+        if args.per_cpu_plots:
+            visualize_throughput_per_cpu(df, f"{plot_basename}-throughput", blktrace_plots_dir)
 
-    if args.per_cpu_plots:
-        visualize_latency_per_cpu(df, f"{plot_basename}-latency", blktrace_plots_dir)
+    if "visualize_latency_overview" in args.plot_types:
+        logger.info(f"Running: visualize_latency_overview")
+        start_time: float = time.perf_counter()
+        visualize_latency_overview(df, f"{plot_basename}-latency", blktrace_plots_dir)
+        end_time: float = time.perf_counter()
+        logger.info(f"Latency plotting total time: {end_time-start_time}")
 
-    # Visualize queue depth.
-    #visualize_queue_depth_overview(df, f"{plot_basename}-q_depth", blktrace_plots_dir)
-    #visualize_queue_depth_per_cpu(df, f"{plot_basename}-q_depth", blktrace_plots_dir)
+        if args.per_cpu_plots:
+            visualize_latency_per_cpu(df, f"{plot_basename}-latency", blktrace_plots_dir)
+
+    if "visualize_queue_depth_overview" in args.plot_types:
+        logger.info(f"Running: visualize_queue_depth_overview")
+        visualize_queue_depth_overview(df, f"{plot_basename}-q_depth", blktrace_plots_dir)
+        logger.info(f"Running: visualize_queue_depth_per_cpu")
+        visualize_queue_depth_per_cpu(df, f"{plot_basename}-q_depth", blktrace_plots_dir)
 
 if __name__ == "__main__":
     main()
