@@ -1,3 +1,4 @@
+import copy
 import gzip
 import logging
 import math
@@ -1727,7 +1728,7 @@ def visualize_lba_blocks_over_time(
             # Add labels and title.
             plt.title(f"LBA Access Over Time ({int(granularity * 100)}% Time Intervals)")
             plt.xlabel(f"Time (% Execution) ({int(granularity * 100)}% steps)")
-            plt.ylabel("Logical Block Address (LBA) ({lba_agg_factor} steps)")
+            plt.ylabel(f"Logical Block Address (LBA) ({lba_agg_factor} steps)")
             plt.tight_layout()
 
             # Save the plot.
